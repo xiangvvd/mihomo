@@ -64,7 +64,7 @@ func ParseListener(mapping map[string]any) (C.InboundListener, error) {
 		listener, err = IN.NewTunnel(tunnelOption)
 	case "tun":
 		tunOption := &IN.TunOption{
-			Stack:     C.TunGvisor.String(),
+			Stack:     C.TunGvisor,
 			DNSHijack: []string{"0.0.0.0:53"}, // default hijack all dns query
 		}
 		err = decoder.Decode(mapping, tunOption)
@@ -107,6 +107,13 @@ func ParseListener(mapping map[string]any) (C.InboundListener, error) {
 			return nil, err
 		}
 		listener, err = IN.NewHysteria2(hysteria2Option)
+	case "hysteria2-realm":
+		hysteria2RealmOption := IN.DefaultHysteria2RealmServerOption()
+		err = decoder.Decode(mapping, hysteria2RealmOption)
+		if err != nil {
+			return nil, err
+		}
+		listener, err = IN.NewHysteria2RealmServer(hysteria2RealmOption)
 	case "tuic":
 		tuicOption := &IN.TuicOption{
 			MaxIdleTime:           15000,
@@ -127,6 +134,27 @@ func ParseListener(mapping map[string]any) (C.InboundListener, error) {
 			return nil, err
 		}
 		listener, err = IN.NewAnyTLS(anytlsOption)
+	case "mieru":
+		mieruOption := &IN.MieruOption{}
+		err = decoder.Decode(mapping, mieruOption)
+		if err != nil {
+			return nil, err
+		}
+		listener, err = IN.NewMieru(mieruOption)
+	case "sudoku":
+		sudokuOption := &IN.SudokuOption{}
+		err = decoder.Decode(mapping, sudokuOption)
+		if err != nil {
+			return nil, err
+		}
+		listener, err = IN.NewSudoku(sudokuOption)
+	case "trusttunnel":
+		trusttunnelOption := &IN.TrustTunnelOption{}
+		err = decoder.Decode(mapping, trusttunnelOption)
+		if err != nil {
+			return nil, err
+		}
+		listener, err = IN.NewTrustTunnel(trusttunnelOption)
 	default:
 		return nil, fmt.Errorf("unsupport proxy type: %s", proxyType)
 	}

@@ -14,7 +14,7 @@ import (
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/constant/provider"
+	P "github.com/metacubex/mihomo/constant/provider"
 
 	"golang.org/x/net/publicsuffix"
 )
@@ -27,8 +27,6 @@ type LoadBalance struct {
 	strategyFn     strategyFn
 	testUrl        string
 	expectedStatus string
-	Hidden         bool
-	Icon           string
 }
 
 var errStrategy = errors.New("unsupported strategy")
@@ -194,7 +192,7 @@ func strategyStickySessions(url string) strategyFn {
 		key := utils.MapHash(getKeyWithSrcAndDst(metadata))
 		length := len(proxies)
 		idx, has := lruCache.Get(key)
-		if !has {
+		if !has || idx >= length {
 			idx = int(jumpHash(key+uint64(time.Now().UnixNano()), int32(length)))
 		}
 
@@ -234,12 +232,24 @@ func (lb *LoadBalance) MarshalJSON() ([]byte, error) {
 		"all":            all,
 		"testUrl":        lb.testUrl,
 		"expectedStatus": lb.expectedStatus,
-		"hidden":         lb.Hidden,
-		"icon":           lb.Icon,
+		"hidden":         lb.Hidden(),
+		"icon":           lb.Icon(),
 	})
 }
 
-func NewLoadBalance(option *GroupCommonOption, providers []provider.ProxyProvider, strategy string) (lb *LoadBalance, err error) {
+func (lb *LoadBalance) Providers() []P.ProxyProvider {
+	return lb.providers
+}
+
+func (lb *LoadBalance) Proxies() []C.Proxy {
+	return lb.GetProxies(false)
+}
+
+func (lb *LoadBalance) Now() string {
+	return ""
+}
+
+func NewLoadBalance(option *GroupCommonOption, providers []P.ProxyProvider, strategy string) (lb *LoadBalance, err error) {
 	var strategyFn strategyFn
 	switch strategy {
 	case "consistent-hashing":
@@ -255,6 +265,8 @@ func NewLoadBalance(option *GroupCommonOption, providers []provider.ProxyProvide
 		GroupBase: NewGroupBase(GroupBaseOption{
 			Name:           option.Name,
 			Type:           C.LoadBalance,
+			Hidden:         option.Hidden,
+			Icon:           option.Icon,
 			Filter:         option.Filter,
 			ExcludeFilter:  option.ExcludeFilter,
 			ExcludeType:    option.ExcludeType,
@@ -266,7 +278,5 @@ func NewLoadBalance(option *GroupCommonOption, providers []provider.ProxyProvide
 		disableUDP:     option.DisableUDP,
 		testUrl:        option.URL,
 		expectedStatus: option.ExpectedStatus,
-		Hidden:         option.Hidden,
-		Icon:           option.Icon,
 	}, nil
 }

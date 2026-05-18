@@ -3,6 +3,7 @@ package outbound
 import (
 	"context"
 	"net"
+	"net/netip"
 	"time"
 
 	N "github.com/metacubex/mihomo/common/net"
@@ -31,6 +32,9 @@ func (d *Dns) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, er
 // ListenPacketContext implements C.ProxyAdapter
 func (d *Dns) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (C.PacketConn, error) {
 	log.Debugln("[DNS] hijack udp:%s from %s", metadata.RemoteAddress(), metadata.SourceAddrPort())
+	if err := d.ResolveUDP(ctx, metadata); err != nil {
+		return nil, err
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -39,6 +43,13 @@ func (d *Dns) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (C.
 		ctx:      ctx,
 		cancel:   cancel,
 	}, d), nil
+}
+
+func (d *Dns) ResolveUDP(ctx context.Context, metadata *C.Metadata) error {
+	if !metadata.Resolved() {
+		metadata.DstIP = netip.AddrFrom4([4]byte{127, 0, 0, 2})
+	}
+	return nil
 }
 
 type dnsPacket struct {
@@ -144,15 +155,16 @@ func (*dnsPacketConn) SetWriteDeadline(t time.Time) error {
 
 func NewDnsWithOption(option DnsOption) *Dns {
 	return &Dns{
-		Base: &Base{
-			name:   option.Name,
-			tp:     C.Dns,
-			udp:    true,
-			tfo:    option.TFO,
-			mpTcp:  option.MPTCP,
-			iface:  option.Interface,
-			rmark:  option.RoutingMark,
-			prefer: C.NewDNSPrefer(option.IPVersion),
-		},
+		Base: NewBase(BaseOption{
+			Name:         option.Name,
+			Type:         C.Dns,
+			ProviderName: option.ProviderName,
+			UDP:          true,
+			TFO:          option.TFO,
+			MPTCP:        option.MPTCP,
+			Interface:    option.Interface,
+			RoutingMark:  option.RoutingMark,
+			Prefer:       option.IPVersion,
+		}),
 	}
 }

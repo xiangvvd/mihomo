@@ -8,14 +8,18 @@ import (
 )
 
 type ASN struct {
-	*Base
+	Base
 	asn         string
 	adapter     string
 	noResolveIP bool
 	isSourceIP  bool
 }
 
-func (a *ASN) Match(metadata *C.Metadata) (bool, string) {
+func (a *ASN) Match(metadata *C.Metadata, helper C.RuleMatchHelper) (bool, string) {
+	if !a.noResolveIP && !a.isSourceIP && helper.ResolveIP != nil {
+		helper.ResolveIP()
+	}
+
 	ip := metadata.DstIP
 	if a.isSourceIP {
 		ip = metadata.SrcIP
@@ -49,10 +53,6 @@ func (a *ASN) Payload() string {
 	return a.asn
 }
 
-func (a *ASN) ShouldResolveIP() bool {
-	return !a.noResolveIP
-}
-
 func (a *ASN) GetASN() string {
 	return a.asn
 }
@@ -64,10 +64,12 @@ func NewIPASN(asn string, adapter string, isSrc, noResolveIP bool) (*ASN, error)
 	}
 
 	return &ASN{
-		Base:        &Base{},
+		Base:        Base{},
 		asn:         asn,
 		adapter:     adapter,
 		noResolveIP: noResolveIP,
 		isSourceIP:  isSrc,
 	}, nil
 }
+
+var _ C.Rule = (*ASN)(nil)

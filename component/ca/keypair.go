@@ -7,50 +7,99 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"os"
+	"runtime"
+	"sync"
+	"time"
+
+	C "github.com/metacubex/mihomo/constant"
+
+	"github.com/metacubex/fswatch"
+	"github.com/metacubex/tls"
 )
 
-type Path interface {
-	Resolve(path string) string
-	IsSafePath(path string) bool
-}
-
-// LoadTLSKeyPair loads a TLS key pair from the provided certificate and private key data or file paths, supporting fallback resolution.
-// Returns a tls.Certificate and an error, where the error indicates issues during parsing or file loading.
+// NewTLSKeyPairLoader creates a loader function for TLS key pairs from the provided certificate and private key data or file paths.
 // If both certificate and privateKey are empty, generates a random TLS RSA key pair.
-// Accepts a Path interface for resolving file paths when necessary.
-func LoadTLSKeyPair(certificate, privateKey string, path Path) (tls.Certificate, error) {
+func NewTLSKeyPairLoader(certificate, privateKey string) (func() (*tls.Certificate, error), error) {
 	if certificate == "" && privateKey == "" {
 		var err error
 		certificate, privateKey, _, err = NewRandomTLSKeyPair(KeyPairTypeRSA)
 		if err != nil {
-			return tls.Certificate{}, err
+			return nil, err
 		}
 	}
 	cert, painTextErr := tls.X509KeyPair([]byte(certificate), []byte(privateKey))
 	if painTextErr == nil {
-		return cert, nil
-	}
-	if path == nil {
-		return tls.Certificate{}, painTextErr
+		return func() (*tls.Certificate, error) {
+			return &cert, nil
+		}, nil
 	}
 
-	certificate = path.Resolve(certificate)
-	privateKey = path.Resolve(privateKey)
+	certificate = C.Path.Resolve(certificate)
+	privateKey = C.Path.Resolve(privateKey)
 	var loadErr error
-	if path.IsSafePath(certificate) && path.IsSafePath(privateKey) {
-		cert, loadErr = tls.LoadX509KeyPair(certificate, privateKey)
+	if !C.Path.IsSafePath(certificate) {
+		loadErr = C.Path.ErrNotSafePath(certificate)
+	} else if !C.Path.IsSafePath(privateKey) {
+		loadErr = C.Path.ErrNotSafePath(privateKey)
 	} else {
-		loadErr = fmt.Errorf("path is not subpath of home directory")
+		cert, loadErr = tls.LoadX509KeyPair(certificate, privateKey)
 	}
 	if loadErr != nil {
-		return tls.Certificate{}, fmt.Errorf("parse certificate failed, maybe format error:%s, or path error: %s", painTextErr.Error(), loadErr.Error())
+		return nil, fmt.Errorf("parse certificate failed, maybe format error:%s, or path error: %s", painTextErr.Error(), loadErr.Error())
 	}
-	return cert, nil
+	gcFlag := new(os.File) // tiny (on the order of 16 bytes or less) and pointer-free objects may never run the finalizer, so we choose new an os.File
+	updateMutex := sync.RWMutex{}
+	if watcher, err := fswatch.NewWatcher(fswatch.Options{Path: []string{certificate, privateKey}, Callback: func(path string) {
+		updateMutex.Lock()
+		defer updateMutex.Unlock()
+		if newCert, err := tls.LoadX509KeyPair(certificate, privateKey); err == nil {
+			cert = newCert
+		}
+	}}); err == nil {
+		if err = watcher.Start(); err == nil {
+			runtime.SetFinalizer(gcFlag, func(f *os.File) {
+				_ = watcher.Close()
+			})
+		}
+	}
+	return func() (*tls.Certificate, error) {
+		defer runtime.KeepAlive(gcFlag)
+		updateMutex.RLock()
+		defer updateMutex.RUnlock()
+		return &cert, nil
+	}, nil
+}
+
+func LoadCertificates(certificate string) (*x509.CertPool, error) {
+	pool := x509.NewCertPool()
+	if pool.AppendCertsFromPEM([]byte(certificate)) {
+		return pool, nil
+	}
+	painTextErr := fmt.Errorf("invalid certificate: %s", certificate)
+
+	certificate = C.Path.Resolve(certificate)
+	var loadErr error
+	if !C.Path.IsSafePath(certificate) {
+		loadErr = C.Path.ErrNotSafePath(certificate)
+	} else {
+		certPEMBlock, err := os.ReadFile(certificate)
+		if pool.AppendCertsFromPEM(certPEMBlock) {
+			return pool, nil
+		}
+		loadErr = err
+	}
+	if loadErr != nil {
+		return nil, fmt.Errorf("parse certificate failed, maybe format error:%s, or path error: %s", painTextErr.Error(), loadErr.Error())
+	}
+	//TODO: support dynamic update pool too
+	//      blocked by: https://github.com/golang/go/issues/64796
+	//      maybe we can direct add `GetRootCAs` and `GetClientCAs` to ourselves tls fork
+	return pool, nil
 }
 
 type KeyPairType string
@@ -82,7 +131,11 @@ func NewRandomTLSKeyPair(keyPairType KeyPairType) (certificate string, privateKe
 		return
 	}
 
-	template := x509.Certificate{SerialNumber: big.NewInt(1)}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Hour * 24 * 365),
+		NotAfter:     time.Now().Add(time.Hour * 24 * 365),
+	}
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, key.Public(), key)
 	if err != nil {
 		return

@@ -2,14 +2,14 @@ package route
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 
 	"github.com/metacubex/mihomo/component/updater"
 	"github.com/metacubex/mihomo/log"
 
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/render"
+	"github.com/metacubex/chi"
+	"github.com/metacubex/chi/render"
+	"github.com/metacubex/http"
 )
 
 func upgradeRouter() http.Handler {
@@ -32,7 +32,11 @@ func upgradeCore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = updater.UpdateCore(execPath)
+	query := r.URL.Query()
+	channel := query.Get("channel")
+	force := query.Get("force") == "true"
+
+	err = updater.DefaultCoreUpdater.Update(execPath, channel, force)
 	if err != nil {
 		log.Warnln("%s", err)
 		render.Status(r, http.StatusInternalServerError)

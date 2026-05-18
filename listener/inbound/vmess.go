@@ -16,6 +16,9 @@ type VmessOption struct {
 	GrpcServiceName string        `inbound:"grpc-service-name,omitempty"`
 	Certificate     string        `inbound:"certificate,omitempty"`
 	PrivateKey      string        `inbound:"private-key,omitempty"`
+	ClientAuthType  string        `inbound:"client-auth-type,omitempty"`
+	ClientAuthCert  string        `inbound:"client-auth-cert,omitempty"`
+	EchKey          string        `inbound:"ech-key,omitempty"`
 	RealityConfig   RealityConfig `inbound:"reality-config,omitempty"`
 	MuxOption       MuxOption     `inbound:"mux-option,omitempty"`
 }
@@ -23,7 +26,7 @@ type VmessOption struct {
 type VmessUser struct {
 	Username string `inbound:"username,omitempty"`
 	UUID     string `inbound:"uuid"`
-	AlterID  int    `inbound:"alterId"`
+	AlterID  int    `inbound:"alterId,omitempty"`
 }
 
 func (o VmessOption) Equal(config C.InboundConfig) bool {
@@ -61,6 +64,9 @@ func NewVmess(options *VmessOption) (*Vmess, error) {
 			GrpcServiceName: options.GrpcServiceName,
 			Certificate:     options.Certificate,
 			PrivateKey:      options.PrivateKey,
+			ClientAuthType:  options.ClientAuthType,
+			ClientAuthCert:  options.ClientAuthCert,
+			EchKey:          options.EchKey,
 			RealityConfig:   options.RealityConfig.Build(),
 			MuxOption:       options.MuxOption.Build(),
 		},

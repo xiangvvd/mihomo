@@ -14,7 +14,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/metacubex/mihomo/component/generater"
+	"github.com/metacubex/mihomo/common/cmd"
+	"github.com/metacubex/mihomo/component/generator"
 	"github.com/metacubex/mihomo/component/geodata"
 	"github.com/metacubex/mihomo/component/updater"
 	"github.com/metacubex/mihomo/config"
@@ -41,6 +42,8 @@ var (
 	externalControllerUnix string
 	externalControllerPipe string
 	secret                 string
+	postUp                 string
+	postDown               string
 )
 
 func init() {
@@ -52,6 +55,8 @@ func init() {
 	flag.StringVar(&externalControllerUnix, "ext-ctl-unix", os.Getenv("CLASH_OVERRIDE_EXTERNAL_CONTROLLER_UNIX"), "override external controller unix address")
 	flag.StringVar(&externalControllerPipe, "ext-ctl-pipe", os.Getenv("CLASH_OVERRIDE_EXTERNAL_CONTROLLER_PIPE"), "override external controller pipe address")
 	flag.StringVar(&secret, "secret", os.Getenv("CLASH_OVERRIDE_SECRET"), "override secret for RESTful API")
+	flag.StringVar(&postUp, "post-up", os.Getenv("CLASH_POST_UP"), "set post-up script")
+	flag.StringVar(&postDown, "post-down", os.Getenv("CLASH_POST_DOWN"), "set post-down script")
 	flag.BoolVar(&geodataMode, "m", false, "set geodata mode")
 	flag.BoolVar(&version, "v", false, "show current version of mihomo")
 	flag.BoolVar(&testConfig, "t", false, "test configuration and exit")
@@ -62,7 +67,19 @@ func main() {
 	// Defensive programming: panic when code mistakenly calls net.DefaultResolver
 	net.DefaultResolver.PreferGo = true
 	net.DefaultResolver.Dial = func(ctx context.Context, network, address string) (net.Conn, error) {
-		panic("should never be called")
+		//panic("should never be called")
+		buf := make([]byte, 1024)
+		for {
+			n := runtime.Stack(buf, true)
+			if n < len(buf) {
+				buf = buf[:n]
+				break
+			}
+			buf = make([]byte, 2*len(buf))
+		}
+		fmt.Fprintf(os.Stderr, "panic: should never be called\n\n%s", buf) // always print all goroutine stack
+		os.Exit(2)
+		return nil, nil
 	}
 
 	_, _ = maxprocs.Set(maxprocs.Logger(func(string, ...any) {}))
@@ -73,7 +90,7 @@ func main() {
 	}
 
 	if len(os.Args) > 1 && os.Args[1] == "generate" {
-		generater.Main(os.Args[2:])
+		generator.Main(os.Args[2:])
 		return
 	}
 
@@ -170,6 +187,19 @@ func main() {
 
 	if updater.GeoAutoUpdate() {
 		updater.RegisterGeoUpdater()
+	}
+
+	if postDown != "" {
+		defer func() {
+			if _, err := cmd.ExecShell(postDown); err != nil {
+				log.Errorln("post-down script error: %s", err.Error())
+			}
+		}()
+	}
+	if postUp != "" {
+		if _, err := cmd.ExecShell(postUp); err != nil {
+			log.Fatalln("post-up script error: %s", err.Error())
+		}
 	}
 
 	defer executor.Shutdown()

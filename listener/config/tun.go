@@ -9,18 +9,6 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-func StringSliceToNetipPrefixSlice(ss []string) ([]netip.Prefix, error) {
-	lps := make([]netip.Prefix, 0, len(ss))
-	for _, s := range ss {
-		prefix, err := netip.ParsePrefix(s)
-		if err != nil {
-			return nil, err
-		}
-		lps = append(lps, prefix)
-	}
-	return lps, nil
-}
-
 type Tun struct {
 	Enable              bool       `yaml:"enable" json:"enable"`
 	Device              string     `yaml:"device" json:"device"`
@@ -29,42 +17,51 @@ type Tun struct {
 	AutoRoute           bool       `yaml:"auto-route" json:"auto-route"`
 	AutoDetectInterface bool       `yaml:"auto-detect-interface" json:"auto-detect-interface"`
 
-	MTU                    uint32         `yaml:"mtu" json:"mtu,omitempty"`
-	GSO                    bool           `yaml:"gso" json:"gso,omitempty"`
-	GSOMaxSize             uint32         `yaml:"gso-max-size" json:"gso-max-size,omitempty"`
-	Inet4Address           []netip.Prefix `yaml:"inet4-address" json:"inet4-address,omitempty"`
-	Inet6Address           []netip.Prefix `yaml:"inet6-address" json:"inet6-address,omitempty"`
-	IPRoute2TableIndex     int            `yaml:"iproute2-table-index" json:"iproute2-table-index,omitempty"`
-	IPRoute2RuleIndex      int            `yaml:"iproute2-rule-index" json:"iproute2-rule-index,omitempty"`
-	AutoRedirect           bool           `yaml:"auto-redirect" json:"auto-redirect,omitempty"`
-	AutoRedirectInputMark  uint32         `yaml:"auto-redirect-input-mark" json:"auto-redirect-input-mark,omitempty"`
-	AutoRedirectOutputMark uint32         `yaml:"auto-redirect-output-mark" json:"auto-redirect-output-mark,omitempty"`
-	StrictRoute            bool           `yaml:"strict-route" json:"strict-route,omitempty"`
-	RouteAddress           []netip.Prefix `yaml:"route-address" json:"route-address,omitempty"`
-	RouteAddressSet        []string       `yaml:"route-address-set" json:"route-address-set,omitempty"`
-	RouteExcludeAddress    []netip.Prefix `yaml:"route-exclude-address" json:"route-exclude-address,omitempty"`
-	RouteExcludeAddressSet []string       `yaml:"route-exclude-address-set" json:"route-exclude-address-set,omitempty"`
-	IncludeInterface       []string       `yaml:"include-interface" json:"include-interface,omitempty"`
-	ExcludeInterface       []string       `yaml:"exclude-interface" json:"exclude-interface,omitempty"`
-	IncludeUID             []uint32       `yaml:"include-uid" json:"include-uid,omitempty"`
-	IncludeUIDRange        []string       `yaml:"include-uid-range" json:"include-uid-range,omitempty"`
-	ExcludeUID             []uint32       `yaml:"exclude-uid" json:"exclude-uid,omitempty"`
-	ExcludeUIDRange        []string       `yaml:"exclude-uid-range" json:"exclude-uid-range,omitempty"`
-	ExcludeSrcPort         []uint16       `yaml:"exclude-src-port" json:"exclude-src-port,omitempty"`
-	ExcludeSrcPortRange    []string       `yaml:"exclude-src-port-range" json:"exclude-src-port-range,omitempty"`
-	ExcludeDstPort         []uint16       `yaml:"exclude-dst-port" json:"exclude-dst-port,omitempty"`
-	ExcludeDstPortRange    []string       `yaml:"exclude-dst-port-range" json:"exclude-dst-port-range,omitempty"`
-	IncludeAndroidUser     []int          `yaml:"include-android-user" json:"include-android-user,omitempty"`
-	IncludePackage         []string       `yaml:"include-package" json:"include-package,omitempty"`
-	ExcludePackage         []string       `yaml:"exclude-package" json:"exclude-package,omitempty"`
-	EndpointIndependentNat bool           `yaml:"endpoint-independent-nat" json:"endpoint-independent-nat,omitempty"`
-	UDPTimeout             int64          `yaml:"udp-timeout" json:"udp-timeout,omitempty"`
-	FileDescriptor         int            `yaml:"file-descriptor" json:"file-descriptor"`
+	MTU                                   uint32         `yaml:"mtu" json:"mtu,omitempty"`
+	GSO                                   bool           `yaml:"gso" json:"gso,omitempty"`
+	GSOMaxSize                            uint32         `yaml:"gso-max-size" json:"gso-max-size,omitempty"`
+	Inet4Address                          []netip.Prefix `yaml:"inet4-address" json:"inet4-address,omitempty"`
+	Inet6Address                          []netip.Prefix `yaml:"inet6-address" json:"inet6-address,omitempty"`
+	IPRoute2TableIndex                    int            `yaml:"iproute2-table-index" json:"iproute2-table-index,omitempty"`
+	IPRoute2RuleIndex                     int            `yaml:"iproute2-rule-index" json:"iproute2-rule-index,omitempty"`
+	AutoRedirect                          bool           `yaml:"auto-redirect" json:"auto-redirect,omitempty"`
+	AutoRedirectInputMark                 uint32         `yaml:"auto-redirect-input-mark" json:"auto-redirect-input-mark,omitempty"`
+	AutoRedirectOutputMark                uint32         `yaml:"auto-redirect-output-mark" json:"auto-redirect-output-mark,omitempty"`
+	AutoRedirectIPRoute2FallbackRuleIndex int            `yaml:"auto-redirect-iproute2-fallback-rule-index" json:"auto-redirect-iproute2-fallback-rule-index,omitempty"`
+	LoopbackAddress                       []netip.Addr   `yaml:"loopback-address" json:"loopback-address,omitempty"`
+	StrictRoute                           bool           `yaml:"strict-route" json:"strict-route,omitempty"`
+	RouteAddress                          []netip.Prefix `yaml:"route-address" json:"route-address,omitempty"`
+	RouteAddressSet                       []string       `yaml:"route-address-set" json:"route-address-set,omitempty"`
+	RouteExcludeAddress                   []netip.Prefix `yaml:"route-exclude-address" json:"route-exclude-address,omitempty"`
+	RouteExcludeAddressSet                []string       `yaml:"route-exclude-address-set" json:"route-exclude-address-set,omitempty"`
+	IncludeInterface                      []string       `yaml:"include-interface" json:"include-interface,omitempty"`
+	ExcludeInterface                      []string       `yaml:"exclude-interface" json:"exclude-interface,omitempty"`
+	IncludeUID                            []uint32       `yaml:"include-uid" json:"include-uid,omitempty"`
+	IncludeUIDRange                       []string       `yaml:"include-uid-range" json:"include-uid-range,omitempty"`
+	ExcludeUID                            []uint32       `yaml:"exclude-uid" json:"exclude-uid,omitempty"`
+	ExcludeUIDRange                       []string       `yaml:"exclude-uid-range" json:"exclude-uid-range,omitempty"`
+	ExcludeSrcPort                        []uint16       `yaml:"exclude-src-port" json:"exclude-src-port,omitempty"`
+	ExcludeSrcPortRange                   []string       `yaml:"exclude-src-port-range" json:"exclude-src-port-range,omitempty"`
+	ExcludeDstPort                        []uint16       `yaml:"exclude-dst-port" json:"exclude-dst-port,omitempty"`
+	ExcludeDstPortRange                   []string       `yaml:"exclude-dst-port-range" json:"exclude-dst-port-range,omitempty"`
+	IncludeAndroidUser                    []int          `yaml:"include-android-user" json:"include-android-user,omitempty"`
+	IncludePackage                        []string       `yaml:"include-package" json:"include-package,omitempty"`
+	ExcludePackage                        []string       `yaml:"exclude-package" json:"exclude-package,omitempty"`
+	IncludeMACAddress                     []string       `yaml:"include-mac-address" json:"include-mac-address,omitempty"`
+	ExcludeMACAddress                     []string       `yaml:"exclude-mac-address" json:"exclude-mac-address,omitempty"`
+	EndpointIndependentNat                bool           `yaml:"endpoint-independent-nat" json:"endpoint-independent-nat,omitempty"`
+	UDPTimeout                            int64          `yaml:"udp-timeout" json:"udp-timeout,omitempty"`
+	DisableICMPForwarding                 bool           `yaml:"disable-icmp-forwarding" json:"disable-icmp-forwarding,omitempty"`
+	FileDescriptor                        int            `yaml:"file-descriptor" json:"file-descriptor"`
 
 	Inet4RouteAddress        []netip.Prefix `yaml:"inet4-route-address" json:"inet4-route-address,omitempty"`
 	Inet6RouteAddress        []netip.Prefix `yaml:"inet6-route-address" json:"inet6-route-address,omitempty"`
 	Inet4RouteExcludeAddress []netip.Prefix `yaml:"inet4-route-exclude-address" json:"inet4-route-exclude-address,omitempty"`
 	Inet6RouteExcludeAddress []netip.Prefix `yaml:"inet6-route-exclude-address" json:"inet6-route-exclude-address,omitempty"`
+
+	// darwin special config
+	RecvMsgX bool `yaml:"recvmsgx" json:"recvmsgx,omitempty"`
+	SendMsgX bool `yaml:"sendmsgx" json:"sendmsgx,omitempty"`
 }
 
 func (t *Tun) Sort() {
@@ -85,6 +82,8 @@ func (t *Tun) Sort() {
 	slices.Sort(t.IncludeAndroidUser)
 	slices.Sort(t.IncludePackage)
 	slices.Sort(t.ExcludePackage)
+	slices.Sort(t.IncludeMACAddress)
+	slices.Sort(t.ExcludeMACAddress)
 
 	slices.SortFunc(t.Inet4RouteAddress, netipx.ComparePrefix)
 	slices.SortFunc(t.Inet6RouteAddress, netipx.ComparePrefix)
@@ -142,6 +141,12 @@ func (t *Tun) Equal(other Tun) bool {
 	if t.AutoRedirectOutputMark != other.AutoRedirectOutputMark {
 		return false
 	}
+	if t.AutoRedirectIPRoute2FallbackRuleIndex != other.AutoRedirectIPRoute2FallbackRuleIndex {
+		return false
+	}
+	if !slices.Equal(t.RouteAddress, other.RouteAddress) {
+		return false
+	}
 	if t.StrictRoute != other.StrictRoute {
 		return false
 	}
@@ -184,10 +189,19 @@ func (t *Tun) Equal(other Tun) bool {
 	if !slices.Equal(t.ExcludePackage, other.ExcludePackage) {
 		return false
 	}
+	if !slices.Equal(t.IncludeMACAddress, other.IncludeMACAddress) {
+		return false
+	}
+	if !slices.Equal(t.ExcludeMACAddress, other.ExcludeMACAddress) {
+		return false
+	}
 	if t.EndpointIndependentNat != other.EndpointIndependentNat {
 		return false
 	}
 	if t.UDPTimeout != other.UDPTimeout {
+		return false
+	}
+	if t.DisableICMPForwarding != other.DisableICMPForwarding {
 		return false
 	}
 	if t.FileDescriptor != other.FileDescriptor {
@@ -204,6 +218,13 @@ func (t *Tun) Equal(other Tun) bool {
 		return false
 	}
 	if !slices.Equal(t.Inet6RouteExcludeAddress, other.Inet6RouteExcludeAddress) {
+		return false
+	}
+
+	if t.RecvMsgX != other.RecvMsgX {
+		return false
+	}
+	if t.SendMsgX != other.SendMsgX {
 		return false
 	}
 

@@ -11,7 +11,7 @@ import (
 	"github.com/metacubex/mihomo/common/singledo"
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/constant/provider"
+	P "github.com/metacubex/mihomo/constant/provider"
 )
 
 type urlTestOption func(*URLTest)
@@ -29,8 +29,6 @@ type URLTest struct {
 	expectedStatus string
 	tolerance      uint16
 	disableUDP     bool
-	Hidden         bool
-	Icon           string
 	fastNode       C.Proxy
 	fastSingle     *singledo.Single[C.Proxy]
 }
@@ -180,9 +178,17 @@ func (u *URLTest) MarshalJSON() ([]byte, error) {
 		"testUrl":        u.testUrl,
 		"expectedStatus": u.expectedStatus,
 		"fixed":          u.selected,
-		"hidden":         u.Hidden,
-		"icon":           u.Icon,
+		"hidden":         u.Hidden(),
+		"icon":           u.Icon(),
 	})
+}
+
+func (u *URLTest) Providers() []P.ProxyProvider {
+	return u.providers
+}
+
+func (u *URLTest) Proxies() []C.Proxy {
+	return u.GetProxies(false)
 }
 
 func (u *URLTest) URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (map[string]uint16, error) {
@@ -202,11 +208,13 @@ func parseURLTestOption(config map[string]any) []urlTestOption {
 	return opts
 }
 
-func NewURLTest(option *GroupCommonOption, providers []provider.ProxyProvider, options ...urlTestOption) *URLTest {
+func NewURLTest(option *GroupCommonOption, providers []P.ProxyProvider, options ...urlTestOption) *URLTest {
 	urlTest := &URLTest{
 		GroupBase: NewGroupBase(GroupBaseOption{
 			Name:           option.Name,
 			Type:           C.URLTest,
+			Hidden:         option.Hidden,
+			Icon:           option.Icon,
 			Filter:         option.Filter,
 			ExcludeFilter:  option.ExcludeFilter,
 			ExcludeType:    option.ExcludeType,
@@ -218,8 +226,6 @@ func NewURLTest(option *GroupCommonOption, providers []provider.ProxyProvider, o
 		disableUDP:     option.DisableUDP,
 		testUrl:        option.URL,
 		expectedStatus: option.ExpectedStatus,
-		Hidden:         option.Hidden,
-		Icon:           option.Icon,
 	}
 
 	for _, option := range options {

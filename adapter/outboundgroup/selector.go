@@ -6,15 +6,14 @@ import (
 	"errors"
 
 	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/constant/provider"
+	P "github.com/metacubex/mihomo/constant/provider"
 )
 
 type Selector struct {
 	*GroupBase
 	disableUDP bool
 	selected   string
-	Hidden     bool
-	Icon       string
+	testUrl    string
 }
 
 // DialContext implements C.ProxyAdapter
@@ -55,13 +54,20 @@ func (s *Selector) MarshalJSON() ([]byte, error) {
 	for _, proxy := range s.GetProxies(false) {
 		all = append(all, proxy.Name())
 	}
+	// When testurl is the default value
+	// do not append a value to ensure that the web dashboard follows the settings of the dashboard
+	var url string
+	if s.testUrl != C.DefaultTestURL {
+		url = s.testUrl
+	}
 
 	return json.Marshal(map[string]any{
-		"type":   s.Type().String(),
-		"now":    s.Now(),
-		"all":    all,
-		"hidden": s.Hidden,
-		"icon":   s.Icon,
+		"type":    s.Type().String(),
+		"now":     s.Now(),
+		"all":     all,
+		"testUrl": url,
+		"hidden":  s.Hidden(),
+		"icon":    s.Icon(),
 	})
 }
 
@@ -100,11 +106,21 @@ func (s *Selector) selectedProxy(touch bool) C.Proxy {
 	return proxies[0]
 }
 
-func NewSelector(option *GroupCommonOption, providers []provider.ProxyProvider) *Selector {
+func (s *Selector) Providers() []P.ProxyProvider {
+	return s.providers
+}
+
+func (s *Selector) Proxies() []C.Proxy {
+	return s.GetProxies(false)
+}
+
+func NewSelector(option *GroupCommonOption, providers []P.ProxyProvider) *Selector {
 	return &Selector{
 		GroupBase: NewGroupBase(GroupBaseOption{
 			Name:           option.Name,
 			Type:           C.Selector,
+			Hidden:         option.Hidden,
+			Icon:           option.Icon,
 			Filter:         option.Filter,
 			ExcludeFilter:  option.ExcludeFilter,
 			ExcludeType:    option.ExcludeType,
@@ -114,7 +130,6 @@ func NewSelector(option *GroupCommonOption, providers []provider.ProxyProvider) 
 		}),
 		selected:   "COMPATIBLE",
 		disableUDP: option.DisableUDP,
-		Hidden:     option.Hidden,
-		Icon:       option.Icon,
+		testUrl:    option.URL,
 	}
 }

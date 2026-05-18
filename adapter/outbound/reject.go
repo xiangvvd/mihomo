@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/metacubex/mihomo/common/buf"
@@ -16,6 +17,7 @@ type Reject struct {
 }
 
 type RejectOption struct {
+	BasicOption
 	Name string `proxy:"name"`
 }
 
@@ -29,38 +31,48 @@ func (r *Reject) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn,
 
 // ListenPacketContext implements C.ProxyAdapter
 func (r *Reject) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (C.PacketConn, error) {
+	if err := r.ResolveUDP(ctx, metadata); err != nil {
+		return nil, err
+	}
 	return newPacketConn(&nopPacketConn{}, r), nil
+}
+
+func (r *Reject) ResolveUDP(ctx context.Context, metadata *C.Metadata) error {
+	if !metadata.Resolved() {
+		metadata.DstIP = netip.IPv4Unspecified()
+	}
+	return nil
 }
 
 func NewRejectWithOption(option RejectOption) *Reject {
 	return &Reject{
-		Base: &Base{
-			name: option.Name,
-			tp:   C.Reject,
-			udp:  true,
-		},
+		Base: NewBase(BaseOption{
+			Name: option.Name,
+			Type: C.Reject,
+			UDP:  true,
+		}),
 	}
 }
 
 func NewReject() *Reject {
 	return &Reject{
-		Base: &Base{
-			name:   "REJECT",
-			tp:     C.Reject,
-			udp:    true,
-			prefer: C.DualStack,
-		},
+		Base: NewBase(BaseOption{
+			Name:   "REJECT",
+			Type:   C.Reject,
+			UDP:    true,
+			Prefer: C.DualStack,
+		}),
 	}
 }
 
 func NewRejectDrop() *Reject {
 	return &Reject{
-		Base: &Base{
-			name:   "REJECT-DROP",
-			tp:     C.RejectDrop,
-			udp:    true,
-			prefer: C.DualStack,
-		},
+		Base: NewBase(BaseOption{
+			Name:   "REJECT-DROP",
+			Type:   C.RejectDrop,
+			UDP:    true,
+			Prefer: C.DualStack,
+		}),
 		drop: true,
 	}
 }

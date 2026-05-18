@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"strings"
 	"time"
 
 	"github.com/metacubex/mihomo/common/utils"
@@ -49,6 +48,7 @@ type Resolver interface {
 	LookupIP(ctx context.Context, host string) (ips []netip.Addr, err error)
 	LookupIPv4(ctx context.Context, host string) (ips []netip.Addr, err error)
 	LookupIPv6(ctx context.Context, host string) (ips []netip.Addr, err error)
+	ResolveECH(ctx context.Context, host string) ([]byte, error)
 	ExchangeContext(ctx context.Context, m *dns.Msg) (msg *dns.Msg, err error)
 	Invalid() bool
 	ClearCache()
@@ -67,7 +67,8 @@ func LookupIPv4WithResolver(ctx context.Context, host string, r Resolver) ([]net
 
 	ip, err := netip.ParseAddr(host)
 	if err == nil {
-		if ip.Is4() || ip.Is4In6() {
+		ip = ip.Unmap()
+		if ip.Is4() {
 			return []netip.Addr{ip}, nil
 		}
 		return []netip.Addr{}, ErrIPVersion
@@ -116,7 +117,8 @@ func LookupIPv6WithResolver(ctx context.Context, host string, r Resolver) ([]net
 	}
 
 	if ip, err := netip.ParseAddr(host); err == nil {
-		if strings.Contains(host, ":") {
+		ip = ip.Unmap()
+		if ip.Is6() {
 			return []netip.Addr{ip}, nil
 		}
 		return nil, ErrIPVersion
@@ -165,6 +167,7 @@ func LookupIPWithResolver(ctx context.Context, host string, r Resolver) ([]netip
 	}
 
 	if ip, err := netip.ParseAddr(host); err == nil {
+		ip = ip.Unmap()
 		return []netip.Addr{ip}, nil
 	}
 
@@ -216,10 +219,29 @@ func ResolveIPPrefer6(ctx context.Context, host string) (netip.Addr, error) {
 	return ResolveIPPrefer6WithResolver(ctx, host, DefaultResolver)
 }
 
+func ResolveECHWithResolver(ctx context.Context, host string, r Resolver) ([]byte, error) {
+	if r != nil && r.Invalid() {
+		return r.ResolveECH(ctx, host)
+	}
+	return SystemResolver.ResolveECH(ctx, host)
+}
+
+func ResolveECH(ctx context.Context, host string) ([]byte, error) {
+	return ResolveECHWithResolver(ctx, host, DefaultResolver)
+}
+
+func ClearCache() {
+	if DefaultResolver != nil {
+		go DefaultResolver.ClearCache()
+	}
+	go SystemResolver.ClearCache() // SystemResolver unneeded check nil
+}
+
 func ResetConnection() {
 	if DefaultResolver != nil {
 		go DefaultResolver.ResetConnection()
 	}
+	go SystemResolver.ResetConnection() // SystemResolver unneeded check nil
 }
 
 func SortationAddr(ips []netip.Addr) (ipv4s, ipv6s []netip.Addr) {

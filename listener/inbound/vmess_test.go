@@ -45,6 +45,8 @@ func testInboundVMess(t *testing.T, inboundOptions inbound.VmessOption, outbound
 	outboundOptions.UUID = userUUID
 	outboundOptions.AlterID = 0
 	outboundOptions.Cipher = "auto"
+	outboundOptions.DialerForAPI = tunnel.NewDialer()
+	outboundOptions.TunnelForAPI = tunnel
 
 	out, err := outbound.NewVmess(outboundOptions)
 	if !assert.NoError(t, err) {
@@ -54,6 +56,9 @@ func testInboundVMess(t *testing.T, inboundOptions inbound.VmessOption, outbound
 
 	tunnel.DoTest(t, out)
 
+	if outboundOptions.Network == "grpc" { // don't test sing-mux over grpc
+		return
+	}
 	testSingMux(t, tunnel, out)
 }
 
@@ -61,6 +66,41 @@ func TestInboundVMess_Basic(t *testing.T) {
 	inboundOptions := inbound.VmessOption{}
 	outboundOptions := outbound.VmessOption{}
 	testInboundVMess(t, inboundOptions, outboundOptions)
+}
+
+func testInboundVMessTLS(t *testing.T, inboundOptions inbound.VmessOption, outboundOptions outbound.VmessOption) {
+	testInboundVMess(t, inboundOptions, outboundOptions)
+	t.Run("ECH", func(t *testing.T) {
+		inboundOptions := inboundOptions
+		outboundOptions := outboundOptions
+		inboundOptions.EchKey = echKeyPem
+		outboundOptions.ECHOpts = outbound.ECHOptions{
+			Enable: true,
+			Config: echConfigBase64,
+		}
+		testInboundVMess(t, inboundOptions, outboundOptions)
+	})
+	t.Run("mTLS", func(t *testing.T) {
+		inboundOptions := inboundOptions
+		outboundOptions := outboundOptions
+		inboundOptions.ClientAuthCert = tlsAuthCertificate
+		outboundOptions.Certificate = tlsAuthCertificate
+		outboundOptions.PrivateKey = tlsAuthPrivateKey
+		testInboundVMess(t, inboundOptions, outboundOptions)
+	})
+	t.Run("mTLS+ECH", func(t *testing.T) {
+		inboundOptions := inboundOptions
+		outboundOptions := outboundOptions
+		inboundOptions.ClientAuthCert = tlsAuthCertificate
+		outboundOptions.Certificate = tlsAuthCertificate
+		outboundOptions.PrivateKey = tlsAuthPrivateKey
+		inboundOptions.EchKey = echKeyPem
+		outboundOptions.ECHOpts = outbound.ECHOptions{
+			Enable: true,
+			Config: echConfigBase64,
+		}
+		testInboundVMess(t, inboundOptions, outboundOptions)
+	})
 }
 
 func TestInboundVMess_TLS(t *testing.T) {
@@ -72,7 +112,7 @@ func TestInboundVMess_TLS(t *testing.T) {
 		TLS:         true,
 		Fingerprint: tlsFingerprint,
 	}
-	testInboundVMess(t, inboundOptions, outboundOptions)
+	testInboundVMessTLS(t, inboundOptions, outboundOptions)
 }
 
 func TestInboundVMess_Ws(t *testing.T) {
@@ -159,7 +199,7 @@ func TestInboundVMess_Wss1(t *testing.T) {
 			Path: "/ws",
 		},
 	}
-	testInboundVMess(t, inboundOptions, outboundOptions)
+	testInboundVMessTLS(t, inboundOptions, outboundOptions)
 }
 
 func TestInboundVMess_Wss2(t *testing.T) {
@@ -177,7 +217,7 @@ func TestInboundVMess_Wss2(t *testing.T) {
 			Path: "/ws",
 		},
 	}
-	testInboundVMess(t, inboundOptions, outboundOptions)
+	testInboundVMessTLS(t, inboundOptions, outboundOptions)
 }
 
 func TestInboundVMess_Grpc1(t *testing.T) {
@@ -192,7 +232,7 @@ func TestInboundVMess_Grpc1(t *testing.T) {
 		Network:     "grpc",
 		GrpcOpts:    outbound.GrpcOptions{GrpcServiceName: "GunService"},
 	}
-	testInboundVMess(t, inboundOptions, outboundOptions)
+	testInboundVMessTLS(t, inboundOptions, outboundOptions)
 }
 
 func TestInboundVMess_Grpc2(t *testing.T) {
@@ -208,7 +248,7 @@ func TestInboundVMess_Grpc2(t *testing.T) {
 		Network:     "grpc",
 		GrpcOpts:    outbound.GrpcOptions{GrpcServiceName: "GunService"},
 	}
-	testInboundVMess(t, inboundOptions, outboundOptions)
+	testInboundVMessTLS(t, inboundOptions, outboundOptions)
 }
 
 func TestInboundVMess_Reality(t *testing.T) {

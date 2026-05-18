@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime/debug"
 	"time"
 
 	N "github.com/metacubex/mihomo/common/net"
@@ -19,6 +20,7 @@ import (
 )
 
 type Conn = utls.Conn
+type LimitFallback = utls.RealityLimitFallback
 
 type Config struct {
 	Dest              string
@@ -27,6 +29,9 @@ type Config struct {
 	ServerNames       []string
 	MaxTimeDifference int
 	Proxy             string
+
+	LimitFallbackUpload   LimitFallback
+	LimitFallbackDownload LimitFallback
 }
 
 func (c Config) Build(tunnel C.Tunnel) (*Builder, error) {
@@ -72,6 +77,9 @@ func (c Config) Build(tunnel C.Tunnel) (*Builder, error) {
 		return inner.HandleTcp(tunnel, address, c.Proxy)
 	}
 
+	realityConfig.LimitFallbackUpload = c.LimitFallbackUpload
+	realityConfig.LimitFallbackDownload = c.LimitFallbackDownload
+
 	return &Builder{realityConfig}, nil
 }
 
@@ -89,7 +97,8 @@ func (b Builder) NewListener(l net.Listener) net.Listener {
 		// We fixed it by calling Close() directly.
 		return realityConnWrapper{c}, nil
 	}, func(a any) {
-		log.Errorln("reality server panic: %s", a)
+		stack := debug.Stack()
+		log.Errorln("reality server panic: %s\n%s", a, stack)
 	})
 }
 
@@ -103,4 +112,12 @@ func (c realityConnWrapper) Upstream() any {
 
 func (c realityConnWrapper) CloseWrite() error {
 	return c.Close()
+}
+
+func (c realityConnWrapper) ReaderReplaceable() bool {
+	return true
+}
+
+func (c realityConnWrapper) WriterReplaceable() bool {
+	return true
 }

@@ -1,16 +1,19 @@
 package http
 
 import (
-	"crypto/tls"
 	"errors"
 	"net"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
 	"github.com/metacubex/mihomo/component/ca"
+	"github.com/metacubex/mihomo/component/ech"
 	C "github.com/metacubex/mihomo/constant"
 	authStore "github.com/metacubex/mihomo/listener/auth"
 	LC "github.com/metacubex/mihomo/listener/config"
 	"github.com/metacubex/mihomo/listener/reality"
+	"github.com/metacubex/mihomo/ntp"
+
+	"github.com/metacubex/tls"
 )
 
 type Listener struct {
@@ -64,19 +67,44 @@ func NewWithConfig(config LC.AuthServer, tunnel C.Tunnel, additions ...inbound.A
 		return nil, err
 	}
 
-	tlsConfig := &tls.Config{}
+	tlsConfig := &tls.Config{Time: ntp.Now}
 	var realityBuilder *reality.Builder
 
 	if config.Certificate != "" && config.PrivateKey != "" {
-		cert, err := ca.LoadTLSKeyPair(config.Certificate, config.PrivateKey, C.Path)
+		certLoader, err := ca.NewTLSKeyPairLoader(config.Certificate, config.PrivateKey)
 		if err != nil {
 			return nil, err
 		}
-		tlsConfig.Certificates = []tls.Certificate{cert}
+		tlsConfig.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return certLoader()
+		}
+
+		if config.EchKey != "" {
+			err = ech.LoadECHKey(config.EchKey, tlsConfig)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	tlsConfig.ClientAuth = ca.ClientAuthTypeFromString(config.ClientAuthType)
+	if len(config.ClientAuthCert) > 0 {
+		if tlsConfig.ClientAuth == tls.NoClientCert {
+			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		}
+	}
+	if tlsConfig.ClientAuth == tls.VerifyClientCertIfGiven || tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert {
+		pool, err := ca.LoadCertificates(config.ClientAuthCert)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig.ClientCAs = pool
 	}
 	if config.RealityConfig.PrivateKey != "" {
-		if tlsConfig.Certificates != nil {
+		if tlsConfig.GetCertificate != nil {
 			return nil, errors.New("certificate is unavailable in reality")
+		}
+		if tlsConfig.ClientAuth != tls.NoClientCert {
+			return nil, errors.New("client-auth is unavailable in reality")
 		}
 		realityBuilder, err = config.RealityConfig.Build(tunnel)
 		if err != nil {
@@ -86,7 +114,7 @@ func NewWithConfig(config LC.AuthServer, tunnel C.Tunnel, additions ...inbound.A
 
 	if realityBuilder != nil {
 		l = realityBuilder.NewListener(l)
-	} else if len(tlsConfig.Certificates) > 0 {
+	} else if tlsConfig.GetCertificate != nil {
 		l = tls.NewListener(l, tlsConfig)
 	}
 

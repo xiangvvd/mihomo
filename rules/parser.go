@@ -10,6 +10,10 @@ import (
 )
 
 func ParseRule(tp, payload, target string, params []string, subRules map[string][]C.Rule) (parsed C.Rule, parseErr error) {
+	if tp != "MATCH" && payload == "" { // only MATCH allowed doesn't contain payload
+		return nil, fmt.Errorf("missing subsequent parameters: %s", tp)
+	}
+
 	switch tp {
 	case "DOMAIN":
 		parsed = RC.NewDomain(payload, target)
@@ -19,6 +23,8 @@ func ParseRule(tp, payload, target string, params []string, subRules map[string]
 		parsed = RC.NewDomainKeyword(payload, target)
 	case "DOMAIN-REGEX":
 		parsed, parseErr = RC.NewDomainRegex(payload, target)
+	case "DOMAIN-WILDCARD":
+		parsed, parseErr = RC.NewDomainWildcard(payload, target)
 	case "GEOSITE":
 		parsed, parseErr = RC.NewGEOSITE(payload, target)
 	case "GEOIP":
@@ -50,13 +56,17 @@ func ParseRule(tp, payload, target string, params []string, subRules map[string]
 	case "DSCP":
 		parsed, parseErr = RC.NewDSCP(payload, target)
 	case "PROCESS-NAME":
-		parsed, parseErr = RC.NewProcess(payload, target, true, false)
+		parsed, parseErr = RC.NewProcess(payload, target, C.ProcessName)
 	case "PROCESS-PATH":
-		parsed, parseErr = RC.NewProcess(payload, target, false, false)
+		parsed, parseErr = RC.NewProcess(payload, target, C.ProcessPath)
 	case "PROCESS-NAME-REGEX":
-		parsed, parseErr = RC.NewProcess(payload, target, true, true)
+		parsed, parseErr = RC.NewProcess(payload, target, C.ProcessNameRegex)
 	case "PROCESS-PATH-REGEX":
-		parsed, parseErr = RC.NewProcess(payload, target, false, true)
+		parsed, parseErr = RC.NewProcess(payload, target, C.ProcessPathRegex)
+	case "PROCESS-NAME-WILDCARD":
+		parsed, parseErr = RC.NewProcess(payload, target, C.ProcessNameWildcard)
+	case "PROCESS-PATH-WILDCARD":
+		parsed, parseErr = RC.NewProcess(payload, target, C.ProcessPathWildcard)
 	case "NETWORK":
 		parsed, parseErr = RC.NewNetworkType(payload, target)
 	case "UID":
@@ -81,8 +91,6 @@ func ParseRule(tp, payload, target string, params []string, subRules map[string]
 	case "MATCH":
 		parsed = RC.NewMatch(target)
 		parseErr = nil
-	case "":
-		parseErr = fmt.Errorf("missing subsequent parameters: %s", payload)
 	default:
 		parseErr = fmt.Errorf("unsupported rule type: %s", tp)
 	}

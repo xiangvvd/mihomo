@@ -2,12 +2,9 @@ package outbound
 
 import (
 	"context"
-	"errors"
 
-	CN "github.com/metacubex/mihomo/common/net"
-	"github.com/metacubex/mihomo/component/dialer"
+	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/component/proxydialer"
-	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
 
@@ -19,7 +16,6 @@ import (
 type SingMux struct {
 	ProxyAdapter
 	client  *mux.Client
-	dialer  proxydialer.SingDialer
 	onlyTcp bool
 }
 
@@ -53,16 +49,9 @@ func (s *SingMux) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 	if s.onlyTcp {
 		return s.ProxyAdapter.ListenPacketContext(ctx, metadata)
 	}
-
-	// sing-mux use stream-oriented udp with a special address, so we need a net.UDPAddr
-	if !metadata.Resolved() {
-		ip, err := resolver.ResolveIP(ctx, metadata.Host)
-		if err != nil {
-			return nil, errors.New("can't resolve ip")
-		}
-		metadata.DstIP = ip
+	if err = s.ProxyAdapter.ResolveUDP(ctx, metadata); err != nil {
+		return nil, err
 	}
-
 	pc, err := s.client.ListenPacket(ctx, M.SocksaddrFromNet(metadata.UDPAddr()))
 	if err != nil {
 		return nil, err
@@ -70,7 +59,7 @@ func (s *SingMux) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 	if pc == nil {
 		return nil, E.New("packetConn is nil")
 	}
-	return newPacketConn(CN.NewThreadSafePacketConn(pc), s), nil
+	return newPacketConn(N.NewThreadSafePacketConn(pc), s), nil
 }
 
 func (s *SingMux) SupportUDP() bool {
@@ -105,7 +94,7 @@ func NewSingMux(option SingMuxOption, proxy ProxyAdapter) (ProxyAdapter, error) 
 	// TODO
 	// "TCP Brutal is only supported on Linux-based systems"
 
-	singDialer := proxydialer.NewSingDialer(proxy, dialer.NewDialer(proxy.DialOptions()...), option.Statistic)
+	singDialer := proxydialer.NewSingDialer(proxydialer.New(proxy, option.Statistic))
 	client, err := mux.NewClient(mux.Options{
 		Dialer:         singDialer,
 		Logger:         log.SingLogger,
@@ -114,6 +103,7 @@ func NewSingMux(option SingMuxOption, proxy ProxyAdapter) (ProxyAdapter, error) 
 		MinStreams:     option.MinStreams,
 		MaxStreams:     option.MaxStreams,
 		Padding:        option.Padding,
+		TCPTimeout:     C.DefaultTCPTimeout,
 		Brutal: mux.BrutalOptions{
 			Enabled:    option.BrutalOpts.Enabled,
 			SendBPS:    StringToBps(option.BrutalOpts.Up),
@@ -126,7 +116,6 @@ func NewSingMux(option SingMuxOption, proxy ProxyAdapter) (ProxyAdapter, error) 
 	outbound := &SingMux{
 		ProxyAdapter: proxy,
 		client:       client,
-		dialer:       singDialer,
 		onlyTcp:      option.OnlyTcp,
 	}
 	return outbound, nil

@@ -2,13 +2,13 @@ package inbound
 
 import (
 	"net"
-	"net/http"
 	"net/netip"
-	"strconv"
 	"strings"
 
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/transport/socks5"
+
+	"github.com/metacubex/http"
 )
 
 func parseSocksAddr(target socks5.Addr) *C.Metadata {
@@ -41,23 +41,8 @@ func parseHTTPAddr(request *http.Request) *C.Metadata {
 	// trim FQDN (#737)
 	host = strings.TrimRight(host, ".")
 
-	var uint16Port uint16
-	if port, err := strconv.ParseUint(port, 10, 16); err == nil {
-		uint16Port = uint16(port)
-	}
-
-	metadata := &C.Metadata{
-		NetWork: C.TCP,
-		Host:    host,
-		DstIP:   netip.Addr{},
-		DstPort: uint16Port,
-	}
-
-	ip, err := netip.ParseAddr(host)
-	if err == nil {
-		metadata.DstIP = ip
-	}
-
+	metadata := &C.Metadata{}
+	_ = metadata.SetRemoteAddress(net.JoinHostPort(host, port))
 	return metadata
 }
 

@@ -201,12 +201,19 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 				trojan["client-fingerprint"] = fingerprint
 			}
 
+			if pcs := query.Get("pcs"); pcs != "" {
+				trojan["fingerprint"] = pcs
+			}
+
 			proxies = append(proxies, trojan)
 
 		case "vless":
 			urlVLess, err := url.Parse(line)
 			if err != nil {
 				continue
+			}
+			if decodedHost, err := tryDecodeBase64([]byte(urlVLess.Host)); err == nil {
+				urlVLess.Host = string(decodedHost)
 			}
 			query := urlVLess.Query()
 			vless := make(map[string]any, 20)
@@ -217,6 +224,9 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			}
 			if flow := query.Get("flow"); flow != "" {
 				vless["flow"] = strings.ToLower(flow)
+			}
+			if encryption := query.Get("encryption"); encryption != "" {
+				vless["encryption"] = encryption
 			}
 			proxies = append(proxies, vless)
 
@@ -321,15 +331,14 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 				vmess["http-opts"] = httpOpts
 
 			case "h2":
-				headers := make(map[string]any)
 				h2Opts := make(map[string]any)
-				if host, ok := values["host"].(string); ok && host != "" {
-					headers["Host"] = []string{host}
+				h2Opts["path"] = "/"
+				if path, ok := values["path"].(string); ok && path != "" {
+					h2Opts["path"] = path
 				}
-
-				h2Opts["path"] = values["path"]
-				h2Opts["headers"] = headers
-
+				if host, ok := values["host"].(string); ok && host != "" {
+					h2Opts["host"] = []string{host}
+				}
 				vmess["h2-opts"] = h2Opts
 
 			case "ws", "httpupgrade":
@@ -443,10 +452,18 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 						"host": pluginInfo.Get("obfs-host"),
 					}
 				} else if strings.Contains(pluginName, "v2ray-plugin") {
+					mode := pluginInfo.Get("mode")
+					if mode == "" {
+						mode = pluginInfo.Get("obfs")
+					}
+					host := pluginInfo.Get("host")
+					if host == "" {
+						host = pluginInfo.Get("obfs-host")
+					}
 					ss["plugin"] = "v2ray-plugin"
 					ss["plugin-opts"] = map[string]any{
-						"mode": pluginInfo.Get("mode"),
-						"host": pluginInfo.Get("host"),
+						"mode": mode,
+						"host": host,
 						"path": pluginInfo.Get("path"),
 						"tls":  strings.Contains(plugin, "tls"),
 					}
@@ -456,12 +473,12 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			proxies = append(proxies, ss)
 
 		case "ssr":
-			dcBuf, err := encRaw.DecodeString(body)
+			dcBuf, err := TryDecodeBase64(body)
 			if err != nil {
 				continue
 			}
 
-			// ssr://host:port:protocol:method:obfs:urlsafebase64pass/?obfsparam=urlsafebase64&protoparam=&remarks=urlsafebase64&group=urlsafebase64&udpport=0&uot=1
+			// ssr://host:port:protocol:method:obfs:urlsafebase64pass/?obfsparam=urlsafebase64param&protoparam=urlsafebase64param&remarks=urlsafebase64remarks&group=urlsafebase64group&udpport=0&uot=1
 
 			before, after, ok := strings.Cut(string(dcBuf), "/?")
 			if !ok {
@@ -490,7 +507,7 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			name := uniqueName(names, remarks)
 
 			obfsParam := decodeUrlSafe(query.Get("obfsparam"))
-			protocolParam := query.Get("protoparam")
+			protocolParam := decodeUrlSafe(query.Get("protoparam"))
 
 			ssr := make(map[string]any, 20)
 
@@ -513,6 +530,170 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			}
 
 			proxies = append(proxies, ssr)
+
+		case "socks", "socks5", "socks5h", "http", "https":
+			link, err := url.Parse(line)
+			if err != nil {
+				continue
+			}
+			server := link.Hostname()
+			if server == "" {
+				continue
+			}
+			portStr := link.Port()
+			if portStr == "" {
+				continue
+			}
+			remarks := link.Fragment
+			if remarks == "" {
+				remarks = fmt.Sprintf("%s:%s", server, portStr)
+			}
+			name := uniqueName(names, remarks)
+			encodeStr := link.User.String()
+			var username, password string
+			if encodeStr != "" {
+				decodeStr := string(DecodeBase64([]byte(encodeStr)))
+				splitStr := strings.Split(decodeStr, ":")
+
+				// todo: should use url.QueryUnescape ?
+				username = splitStr[0]
+				if len(splitStr) == 2 {
+					password = splitStr[1]
+				}
+			}
+			socks := make(map[string]any, 10)
+			socks["name"] = name
+			socks["type"] = func() string {
+				switch scheme {
+				case "socks", "socks5", "socks5h":
+					return "socks5"
+				case "http", "https":
+					return "http"
+				}
+				return scheme
+			}()
+			socks["server"] = server
+			socks["port"] = portStr
+			socks["username"] = username
+			socks["password"] = password
+			socks["skip-cert-verify"] = true
+			if scheme == "https" {
+				socks["tls"] = true
+			}
+
+			proxies = append(proxies, socks)
+
+		case "anytls":
+			// https://github.com/anytls/anytls-go/blob/main/docs/uri_scheme.md
+			link, err := url.Parse(line)
+			if err != nil {
+				continue
+			}
+			username := link.User.Username()
+			password, exist := link.User.Password()
+			if !exist {
+				password = username
+			}
+			query := link.Query()
+			server := link.Hostname()
+			if server == "" {
+				continue
+			}
+			portStr := link.Port()
+			if portStr == "" {
+				continue
+			}
+			insecure, sni := query.Get("insecure"), query.Get("sni")
+			insecureBool := insecure == "1"
+			fingerprint := query.Get("hpkp")
+
+			remarks := link.Fragment
+			if remarks == "" {
+				remarks = fmt.Sprintf("%s:%s", server, portStr)
+			}
+			name := uniqueName(names, remarks)
+			anytls := make(map[string]any, 10)
+			anytls["name"] = name
+			anytls["type"] = "anytls"
+			anytls["server"] = server
+			anytls["port"] = portStr
+			anytls["username"] = username
+			anytls["password"] = password
+			anytls["sni"] = sni
+			anytls["fingerprint"] = fingerprint
+			anytls["skip-cert-verify"] = insecureBool
+			anytls["udp"] = true
+
+			proxies = append(proxies, anytls)
+
+		case "mierus":
+			urlMieru, err := url.Parse(line)
+			if err != nil {
+				continue
+			}
+
+			query := urlMieru.Query()
+
+			server := urlMieru.Hostname()
+			if server == "" {
+				continue
+			}
+			username := urlMieru.User.Username()
+			password, _ := urlMieru.User.Password()
+
+			baseName := urlMieru.Fragment
+			if baseName == "" {
+				baseName = query.Get("profile")
+			}
+			if baseName == "" {
+				baseName = server
+			}
+
+			multiplexing := query.Get("multiplexing")
+			handshakeMode := query.Get("handshake-mode")
+			trafficPattern := query.Get("traffic-pattern")
+
+			portList := query["port"]
+			protocolList := query["protocol"]
+			if len(portList) == 0 || len(portList) != len(protocolList) {
+				continue
+			}
+
+			for i, port := range portList {
+				protocol := protocolList[i]
+				name := uniqueName(names, fmt.Sprintf("%s:%s/%s", baseName, port, protocol))
+
+				mieru := make(map[string]any, 15)
+				mieru["name"] = name
+				mieru["type"] = "mieru"
+				mieru["server"] = server
+				mieru["transport"] = protocol
+				mieru["udp"] = true
+				mieru["username"] = username
+				mieru["password"] = password
+
+				if strings.Contains(port, "-") {
+					mieru["port-range"] = port
+				} else {
+					portNum, err := strconv.Atoi(port)
+					if err != nil {
+						continue
+					}
+					mieru["port"] = portNum
+				}
+
+				if multiplexing != "" {
+					mieru["multiplexing"] = multiplexing
+				}
+				if handshakeMode != "" {
+					mieru["handshake-mode"] = handshakeMode
+				}
+				if trafficPattern != "" {
+					mieru["traffic-pattern"] = trafficPattern
+				}
+
+				proxies = append(proxies, mieru)
+			}
 		}
 	}
 

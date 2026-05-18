@@ -10,12 +10,11 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/common/pool"
+	"github.com/metacubex/mihomo/common/yaml"
 	"github.com/metacubex/mihomo/component/resource"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
 	"github.com/metacubex/mihomo/rules/common"
-
-	"gopkg.in/yaml.v3"
 )
 
 var tunnel P.Tunnel
@@ -46,10 +45,8 @@ type providerForApi struct {
 
 type ruleStrategy interface {
 	Behavior() P.RuleBehavior
-	Match(metadata *C.Metadata) bool
+	Match(metadata *C.Metadata, helper C.RuleMatchHelper) bool
 	Count() int
-	ShouldResolveIP() bool
-	ShouldFindProcess() bool
 	Reset()
 	Insert(rule string)
 	FinishInsert()
@@ -79,16 +76,8 @@ func (bp *baseProvider) Count() int {
 	return bp.strategy.Count()
 }
 
-func (bp *baseProvider) Match(metadata *C.Metadata) bool {
-	return bp.strategy != nil && bp.strategy.Match(metadata)
-}
-
-func (bp *baseProvider) ShouldResolveIP() bool {
-	return bp.strategy.ShouldResolveIP()
-}
-
-func (bp *baseProvider) ShouldFindProcess() bool {
-	return bp.strategy.ShouldFindProcess()
+func (bp *baseProvider) Match(metadata *C.Metadata, helper C.RuleMatchHelper) bool {
+	return bp.strategy != nil && bp.strategy.Match(metadata, helper)
 }
 
 func (bp *baseProvider) Strategy() any {

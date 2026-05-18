@@ -1,26 +1,31 @@
 package trojan
 
 import (
-	"crypto/tls"
 	"errors"
 	"io"
 	"net"
-	"net/http"
 	"strings"
+	"time"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
+	N "github.com/metacubex/mihomo/common/net"
+	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/ca"
+	"github.com/metacubex/mihomo/component/ech"
 	C "github.com/metacubex/mihomo/constant"
 	LC "github.com/metacubex/mihomo/listener/config"
 	"github.com/metacubex/mihomo/listener/reality"
 	"github.com/metacubex/mihomo/listener/sing"
+	"github.com/metacubex/mihomo/ntp"
 	"github.com/metacubex/mihomo/transport/gun"
 	"github.com/metacubex/mihomo/transport/shadowsocks/core"
 	"github.com/metacubex/mihomo/transport/socks5"
 	"github.com/metacubex/mihomo/transport/trojan"
 	mihomoVMess "github.com/metacubex/mihomo/transport/vmess"
 
+	"github.com/metacubex/http"
 	"github.com/metacubex/smux"
+	"github.com/metacubex/tls"
 )
 
 type Listener struct {
@@ -69,20 +74,48 @@ func New(config LC.TrojanServer, tunnel C.Tunnel, additions ...inbound.Addition)
 	}
 	sl = &Listener{false, config, nil, keys, pickCipher, h}
 
-	tlsConfig := &tls.Config{}
+	httpServer := http.Server{
+		IdleTimeout: 30 * time.Second,
+		Protocols:   new(http.Protocols),
+	}
+	tlsConfig := &tls.Config{Time: ntp.Now}
 	var realityBuilder *reality.Builder
-	var httpHandler http.Handler
 
 	if config.Certificate != "" && config.PrivateKey != "" {
-		cert, err := ca.LoadTLSKeyPair(config.Certificate, config.PrivateKey, C.Path)
+		certLoader, err := ca.NewTLSKeyPairLoader(config.Certificate, config.PrivateKey)
 		if err != nil {
 			return nil, err
 		}
-		tlsConfig.Certificates = []tls.Certificate{cert}
+		tlsConfig.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return certLoader()
+		}
+
+		if config.EchKey != "" {
+			err = ech.LoadECHKey(config.EchKey, tlsConfig)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	tlsConfig.ClientAuth = ca.ClientAuthTypeFromString(config.ClientAuthType)
+	if len(config.ClientAuthCert) > 0 {
+		if tlsConfig.ClientAuth == tls.NoClientCert {
+			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		}
+	}
+	if tlsConfig.ClientAuth == tls.VerifyClientCertIfGiven || tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert {
+		pool, err := ca.LoadCertificates(config.ClientAuthCert)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig.ClientCAs = pool
 	}
 	if config.RealityConfig.PrivateKey != "" {
-		if tlsConfig.Certificates != nil {
+		if tlsConfig.GetCertificate != nil {
 			return nil, errors.New("certificate is unavailable in reality")
+		}
+		if tlsConfig.ClientAuth != tls.NoClientCert {
+			return nil, errors.New("client-auth is unavailable in reality")
 		}
 		realityBuilder, err = config.RealityConfig.Build(tunnel)
 		if err != nil {
@@ -99,17 +132,27 @@ func New(config LC.TrojanServer, tunnel C.Tunnel, additions ...inbound.Addition)
 			}
 			sl.HandleConn(conn, tunnel, additions...)
 		})
-		httpHandler = httpMux
+		httpServer.Handler = httpMux
+		httpServer.Protocols.SetHTTP1(true)
 		tlsConfig.NextProtos = append(tlsConfig.NextProtos, "http/1.1")
 	}
 	if config.GrpcServiceName != "" {
-		httpHandler = gun.NewServerHandler(gun.ServerOption{
+		httpServer.Handler = gun.NewServerHandler(gun.ServerOption{
 			ServiceName: config.GrpcServiceName,
 			ConnHandler: func(conn net.Conn) {
 				sl.HandleConn(conn, tunnel, additions...)
 			},
-			HttpHandler: httpHandler,
+			HttpHandler: httpServer.Handler,
 		})
+		httpServer.Protocols.SetHTTP2(true)
+		// SetUnencryptedHTTP2 to ensure we can work in plain http2 and some tls conn is not *tls.Conn (like *reality.Conn)
+		//
+		// Enable HTTP/2 support unconditionally on the server.
+		//
+		// Note that this usage is limited to our own net/http fork
+		// The standard library also needs to mask the tls.Conn type for the conn returned by the Listener.
+		// see: https://github.com/golang/go/issues/79293#issuecomment-4426393534
+		httpServer.Protocols.SetUnencryptedHTTP2(true)
 		tlsConfig.NextProtos = append([]string{"h2"}, tlsConfig.NextProtos...) // h2 must before http/1.1
 	}
 
@@ -123,7 +166,7 @@ func New(config LC.TrojanServer, tunnel C.Tunnel, additions ...inbound.Addition)
 		}
 		if realityBuilder != nil {
 			l = realityBuilder.NewListener(l)
-		} else if len(tlsConfig.Certificates) > 0 {
+		} else if tlsConfig.GetCertificate != nil {
 			l = tls.NewListener(l, tlsConfig)
 		} else if !config.TrojanSSOption.Enabled {
 			return nil, errors.New("disallow using Trojan without both certificates/reality/ss config")
@@ -131,8 +174,8 @@ func New(config LC.TrojanServer, tunnel C.Tunnel, additions ...inbound.Addition)
 		sl.listeners = append(sl.listeners, l)
 
 		go func() {
-			if httpHandler != nil {
-				_ = http.Serve(l, httpHandler)
+			if httpServer.Handler != nil {
+				_ = httpServer.Serve(l)
 				return
 			}
 			for {
@@ -242,20 +285,25 @@ func (l *Listener) handleConn(inMux bool, conn net.Conn, tunnel C.Tunnel, additi
 		l.handler.HandleSocket(target, conn, additions...)
 	case trojan.CommandUDP:
 		pc := trojan.NewPacketConn(conn)
+		remoteAddr := conn.RemoteAddr()
+		connID := utils.NewUUIDV4().String() // make a new SNAT key
+
 		for {
-			data, put, remoteAddr, err := pc.WaitReadFrom()
+			data, put, addr, err := pc.WaitReadFrom()
 			if err != nil {
 				if put != nil {
 					put()
 				}
 				break
 			}
+			target := socks5.ParseAddrToSocksAddr(addr)
 			cPacket := &packet{
 				pc:      pc,
 				rAddr:   remoteAddr,
 				payload: data,
 				put:     put,
 			}
+			cPacket.rAddr = N.NewCustomAddr(C.TROJAN.String(), connID, cPacket.rAddr) // for tunnel's handleUDPConn
 
 			tunnel.HandleUDPPacket(inbound.NewPacket(target, cPacket, C.TROJAN, additions...))
 		}

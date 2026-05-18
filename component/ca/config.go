@@ -1,7 +1,6 @@
 package ca
 
 import (
-	"crypto/tls"
 	"crypto/x509"
 	_ "embed"
 	"errors"
@@ -10,7 +9,10 @@ import (
 	"strconv"
 	"sync"
 
-	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/common/once"
+	"github.com/metacubex/mihomo/ntp"
+
+	"github.com/metacubex/tls"
 )
 
 var globalCertPool *x509.CertPool
@@ -65,70 +67,68 @@ func ResetCertificate() {
 	initializeCertPool()
 }
 
-func getCertPool() *x509.CertPool {
+func GetCertPool() *x509.CertPool {
+	mutex.Lock()
+	defer mutex.Unlock()
 	if globalCertPool == nil {
-		mutex.Lock()
-		defer mutex.Unlock()
-		if globalCertPool != nil {
-			return globalCertPool
-		}
 		initializeCertPool()
 	}
 	return globalCertPool
 }
 
-func GetCertPool(customCA string, customCAString string) (*x509.CertPool, error) {
-	var certificate []byte
-	var err error
-	if len(customCA) > 0 {
-		path := C.Path.Resolve(customCA)
-		if !C.Path.IsSafePath(path) {
-			return nil, fmt.Errorf("path is not subpath of home directory: %s", path)
-		}
-		certificate, err = os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("load ca error: %w", err)
-		}
-	} else if customCAString != "" {
-		certificate = []byte(customCAString)
-	}
-	if len(certificate) > 0 {
-		certPool := x509.NewCertPool()
-		if !certPool.AppendCertsFromPEM(certificate) {
-			return nil, fmt.Errorf("failed to parse certificate:\n\n %s", certificate)
-		}
-		return certPool, nil
-	} else {
-		return getCertPool(), nil
-	}
+type Option struct {
+	TLSConfig   *tls.Config
+	Fingerprint string
+	ZeroTrust   bool
+	Certificate string
+	PrivateKey  string
 }
 
-// GetTLSConfig specified fingerprint, customCA and customCAString
-func GetTLSConfig(tlsConfig *tls.Config, fingerprint string, customCA string, customCAString string) (_ *tls.Config, err error) {
+func GetTLSConfig(opt Option) (tlsConfig *tls.Config, err error) {
+	tlsConfig = opt.TLSConfig
 	if tlsConfig == nil {
 		tlsConfig = &tls.Config{}
 	}
-	tlsConfig.RootCAs, err = GetCertPool(customCA, customCAString)
-	if err != nil {
-		return nil, err
+	tlsConfig.Time = ntp.Now
+
+	if opt.ZeroTrust {
+		tlsConfig.RootCAs = zeroTrustCertPool()
+	} else {
+		tlsConfig.RootCAs = GetCertPool()
 	}
 
-	if len(fingerprint) > 0 {
-		tlsConfig.VerifyPeerCertificate, err = NewFingerprintVerifier(fingerprint)
+	if len(opt.Fingerprint) > 0 {
+		verifier, err := NewFingerprintVerifier(opt.Fingerprint, tlsConfig.Time)
 		if err != nil {
 			return nil, err
 		}
+		tlsConfig.VerifyConnection = func(state tls.ConnectionState) error {
+			// [ConnectionState.ServerName] can return the actual ServerName needed for verification,
+			// avoiding inconsistencies caused by [tlsConfig.ServerName] being modified after the [NewFingerprintVerifier] call.
+			// https://github.com/golang/go/issues/36736#issuecomment-587925536
+			return verifier(state.PeerCertificates, state.ServerName)
+		}
 		tlsConfig.InsecureSkipVerify = true
+	}
+
+	if len(opt.Certificate) > 0 || len(opt.PrivateKey) > 0 {
+		certLoader, err := NewTLSKeyPairLoader(opt.Certificate, opt.PrivateKey)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			return certLoader()
+		}
 	}
 	return tlsConfig, nil
 }
 
-// GetSpecifiedFingerprintTLSConfig specified fingerprint
-func GetSpecifiedFingerprintTLSConfig(tlsConfig *tls.Config, fingerprint string) (*tls.Config, error) {
-	return GetTLSConfig(tlsConfig, fingerprint, "", "")
-}
-
-func GetGlobalTLSConfig(tlsConfig *tls.Config) *tls.Config {
-	tlsConfig, _ = GetTLSConfig(tlsConfig, "", "", "")
-	return tlsConfig
-}
+var zeroTrustCertPool = once.OnceValue(func() *x509.CertPool {
+	if len(_CaCertificates) != 0 { // always using embed cert first
+		zeroTrustCertPool := x509.NewCertPool()
+		if zeroTrustCertPool.AppendCertsFromPEM(_CaCertificates) {
+			return zeroTrustCertPool
+		}
+	}
+	return nil // fallback to system pool
+})

@@ -12,7 +12,7 @@ import (
 )
 
 type GEOSITE struct {
-	*Base
+	Base
 	country    string
 	adapter    string
 	recodeSize int
@@ -22,7 +22,7 @@ func (gs *GEOSITE) RuleType() C.RuleType {
 	return C.GEOSITE
 }
 
-func (gs *GEOSITE) Match(metadata *C.Metadata) (bool, string) {
+func (gs *GEOSITE) Match(metadata *C.Metadata, helper C.RuleMatchHelper) (bool, string) {
 	return gs.MatchDomain(metadata.RuleHost()), gs.adapter
 }
 
@@ -68,7 +68,7 @@ func NewGEOSITE(country string, adapter string) (*GEOSITE, error) {
 	}
 
 	geoSite := &GEOSITE{
-		Base:    &Base{},
+		Base:    Base{},
 		country: country,
 		adapter: adapter,
 	}

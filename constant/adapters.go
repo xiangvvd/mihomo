@@ -45,6 +45,12 @@ const (
 	Ssh
 	Mieru
 	AnyTLS
+	Sudoku
+	Masque
+	TrustTunnel
+	OpenVPN
+	Tailscale
+	GostRelay
 )
 
 const (
@@ -59,6 +65,7 @@ var ErrNotSupport = errors.New("no support")
 
 type Connection interface {
 	Chains() Chain
+	ProviderChains() Chain
 	AppendToChains(adapter ProxyAdapter)
 	RemoteDestination() string
 }
@@ -93,8 +100,7 @@ type Conn interface {
 type PacketConn interface {
 	N.EnhancePacketConn
 	Connection
-	// Deprecate WriteWithMetadata because of remote resolve DNS cause TURN failed
-	// WriteWithMetadata(p []byte, metadata *Metadata) (n int, err error)
+	ResolveUDP(ctx context.Context, metadata *Metadata) error
 }
 
 type Dialer interface {
@@ -103,13 +109,14 @@ type Dialer interface {
 }
 
 type ProxyInfo struct {
-	XUDP        bool
-	TFO         bool
-	MPTCP       bool
-	SMUX        bool
-	Interface   string
-	RoutingMark int
-	DialerProxy string
+	XUDP         bool
+	TFO          bool
+	MPTCP        bool
+	SMUX         bool
+	Interface    string
+	RoutingMark  int
+	ProviderName string
+	DialerProxy  string
 }
 
 type ProxyAdapter interface {
@@ -122,17 +129,6 @@ type ProxyAdapter interface {
 	ProxyInfo() ProxyInfo
 	MarshalJSON() ([]byte, error)
 
-	// Deprecated: use DialContextWithDialer and ListenPacketWithDialer instead.
-	// StreamConn wraps a protocol around net.Conn with Metadata.
-	//
-	// Examples:
-	//	conn, _ := net.DialContext(context.Background(), "tcp", "host:port")
-	//	conn, _ = adapter.StreamConnContext(context.Background(), conn, metadata)
-	//
-	// It returns a C.Conn with protocol which start with
-	// a new session (if any)
-	StreamConnContext(ctx context.Context, c net.Conn, metadata *Metadata) (net.Conn, error)
-
 	// DialContext return a C.Conn with protocol which
 	// contains multiplexing-related reuse logic (if any)
 	DialContext(ctx context.Context, metadata *Metadata) (Conn, error)
@@ -140,10 +136,6 @@ type ProxyAdapter interface {
 
 	// SupportUOT return UDP over TCP support
 	SupportUOT() bool
-
-	SupportWithDialer() NetWork
-	DialContextWithDialer(ctx context.Context, dialer Dialer, metadata *Metadata) (Conn, error)
-	ListenPacketWithDialer(ctx context.Context, dialer Dialer, metadata *Metadata) (PacketConn, error)
 
 	// IsL3Protocol return ProxyAdapter working in L3 (tell dns module not pass the domain to avoid loopback)
 	IsL3Protocol(metadata *Metadata) bool
@@ -153,11 +145,6 @@ type ProxyAdapter interface {
 
 	// Close releasing associated resources
 	Close() error
-}
-
-type Group interface {
-	URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (mp map[string]uint16, err error)
-	Touch()
 }
 
 type DelayHistory struct {
@@ -180,12 +167,6 @@ type Proxy interface {
 	ExtraDelayHistories() map[string]ProxyState
 	LastDelayForTestUrl(url string) uint16
 	URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (uint16, error)
-
-	// Deprecated: use DialContext instead.
-	Dial(metadata *Metadata) (Conn, error)
-
-	// Deprecated: use DialPacketConn instead.
-	DialUDP(metadata *Metadata) (PacketConn, error)
 }
 
 // AdapterType is enum of adapter type
@@ -237,6 +218,18 @@ func (at AdapterType) String() string {
 		return "Mieru"
 	case AnyTLS:
 		return "AnyTLS"
+	case Sudoku:
+		return "Sudoku"
+	case Masque:
+		return "Masque"
+	case TrustTunnel:
+		return "TrustTunnel"
+	case OpenVPN:
+		return "OpenVPN"
+	case Tailscale:
+		return "Tailscale"
+	case GostRelay:
+		return "GostRelay"
 	case Relay:
 		return "Relay"
 	case Selector:
@@ -322,10 +315,15 @@ type PacketSender interface {
 	Send(PacketAdapter)
 	// Process is a blocking loop to send PacketAdapter to PacketConn and update the WriteBackProxy
 	Process(PacketConn, WriteBackProxy)
-	// ResolveUDP do a local resolve UDP dns blocking if metadata is not resolved
-	ResolveUDP(*Metadata) error
 	// Close stop the Process loop
 	Close()
+	// DoSniff will blocking after sniffer work done
+	DoSniff(*Metadata) error
+	// AddMapping add a destination NAT record
+	AddMapping(originMetadata *Metadata, metadata *Metadata)
+	// RestoreReadFrom restore destination NAT for ReadFrom
+	// the implement must ensure returned netip.Add is valid (or just return input addr)
+	RestoreReadFrom(addr netip.Addr) netip.Addr
 }
 
 type NatTable interface {
