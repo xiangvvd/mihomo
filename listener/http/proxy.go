@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"strings"
 	"sync"
 
@@ -14,6 +13,8 @@ import (
 	"github.com/metacubex/mihomo/component/auth"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
+
+	"github.com/metacubex/http"
 )
 
 type bodyWrapper struct {
@@ -30,7 +31,7 @@ func (b *bodyWrapper) Read(p []byte) (n int, err error) {
 	return n, err
 }
 
-func HandleConn(c net.Conn, tunnel C.Tunnel, authenticator auth.Authenticator, additions ...inbound.Addition) {
+func HandleConn(c net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...inbound.Addition) {
 	additions = append(additions, inbound.Placeholder) // Add a placeholder for InUser
 	inUserIdx := len(additions) - 1
 	client := newClient(c, tunnel, additions)
@@ -41,11 +42,11 @@ func HandleConn(c net.Conn, tunnel C.Tunnel, authenticator auth.Authenticator, a
 
 	conn := N.NewBufferedConn(c)
 
-	keepAlive := true
+	authenticator := store.Authenticator()
 	trusted := authenticator == nil // disable authenticate if lru is nil
 	lastUser := ""
 
-	for keepAlive {
+	for {
 		peekMutex.Lock()
 		request, err := ReadRequest(conn.Reader())
 		peekMutex.Unlock()
@@ -55,13 +56,12 @@ func HandleConn(c net.Conn, tunnel C.Tunnel, authenticator auth.Authenticator, a
 
 		request.RemoteAddr = conn.RemoteAddr().String()
 
-		keepAlive = strings.TrimSpace(strings.ToLower(request.Header.Get("Proxy-Connection"))) == "keep-alive"
+		keepAlive := strings.TrimSpace(strings.ToLower(request.Header.Get("Proxy-Connection"))) == "keep-alive"
 
-		var resp *http.Response
-
-		var user string
-		resp, user = authenticate(request, authenticator) // always call authenticate function to get user
-		trusted = trusted || resp == nil
+		resp, user := authenticate(request, authenticator) // always call authenticate function to get user
+		if resp == nil {
+			trusted = true
+		}
 		additions[inUserIdx] = inbound.WithInUser(user)
 
 		if trusted {
@@ -128,16 +128,21 @@ func HandleConn(c net.Conn, tunnel C.Tunnel, authenticator auth.Authenticator, a
 			removeHopByHopHeaders(resp.Header)
 		}
 
-		if keepAlive {
+		if !keepAlive {
+			resp.Close = true // close connection if keep-alive is not set
+		}
+		if keepAlive && resp.ContentLength > 0 {
+			resp.Close = false // don't need to close connection if content length is positive numbers
+		}
+
+		if !resp.Close {
 			resp.Header.Set("Proxy-Connection", "keep-alive")
 			resp.Header.Set("Connection", "keep-alive")
 			resp.Header.Set("Keep-Alive", "timeout=4")
 		}
 
-		resp.Close = !keepAlive
-
 		err = resp.Write(conn)
-		if err != nil {
+		if err != nil || resp.Close {
 			break // close connection
 		}
 	}
@@ -146,9 +151,6 @@ func HandleConn(c net.Conn, tunnel C.Tunnel, authenticator auth.Authenticator, a
 }
 
 func authenticate(request *http.Request, authenticator auth.Authenticator) (resp *http.Response, user string) {
-	if inbound.SkipAuthRemoteAddress(request.RemoteAddr) {
-		authenticator = nil
-	}
 	credential := parseBasicProxyAuthorization(request)
 	if credential == "" && authenticator != nil {
 		resp = responseWith(request, http.StatusProxyAuthRequired)

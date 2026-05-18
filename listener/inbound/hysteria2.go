@@ -1,6 +1,8 @@
 package inbound
 
 import (
+	"strings"
+
 	C "github.com/metacubex/mihomo/constant"
 	LC "github.com/metacubex/mihomo/listener/config"
 	"github.com/metacubex/mihomo/listener/sing_hysteria2"
@@ -14,6 +16,9 @@ type Hysteria2Option struct {
 	ObfsPassword          string            `inbound:"obfs-password,omitempty"`
 	Certificate           string            `inbound:"certificate"`
 	PrivateKey            string            `inbound:"private-key"`
+	ClientAuthType        string            `inbound:"client-auth-type,omitempty"`
+	ClientAuthCert        string            `inbound:"client-auth-cert,omitempty"`
+	EchKey                string            `inbound:"ech-key,omitempty"`
 	MaxIdleTime           int               `inbound:"max-idle-time,omitempty"`
 	ALPN                  []string          `inbound:"alpn,omitempty"`
 	Up                    string            `inbound:"up,omitempty"`
@@ -21,8 +26,51 @@ type Hysteria2Option struct {
 	IgnoreClientBandwidth bool              `inbound:"ignore-client-bandwidth,omitempty"`
 	Masquerade            string            `inbound:"masquerade,omitempty"`
 	CWND                  int               `inbound:"cwnd,omitempty"`
+	BBRProfile            string            `inbound:"bbr-profile,omitempty"`
 	UdpMTU                int               `inbound:"udp-mtu,omitempty"`
 	MuxOption             MuxOption         `inbound:"mux-option,omitempty"`
+
+	RealmOpts Hysteria2RealmOption `inbound:"realm-opts,omitempty"`
+
+	// quic-go special config
+	InitialStreamReceiveWindow     uint64 `inbound:"initial-stream-receive-window,omitempty"`
+	MaxStreamReceiveWindow         uint64 `inbound:"max-stream-receive-window,omitempty"`
+	InitialConnectionReceiveWindow uint64 `inbound:"initial-connection-receive-window,omitempty"`
+	MaxConnectionReceiveWindow     uint64 `inbound:"max-connection-receive-window,omitempty"`
+}
+
+type Hysteria2RealmOption struct {
+	Enable      bool     `inbound:"enable,omitempty"`
+	ServerURL   string   `inbound:"server-url,omitempty"`
+	Token       string   `inbound:"token,omitempty"`
+	RealmID     string   `inbound:"realm-id,omitempty"`
+	STUNServers []string `inbound:"stun-servers,omitempty"`
+
+	// for ServerURL
+	SNI            string   `inbound:"sni,omitempty"`
+	SkipCertVerify bool     `inbound:"skip-cert-verify,omitempty"`
+	Fingerprint    string   `inbound:"fingerprint,omitempty"`
+	Certificate    string   `inbound:"certificate,omitempty"`
+	PrivateKey     string   `inbound:"private-key,omitempty"`
+	ALPN           []string `inbound:"alpn,omitempty"`
+	Proxy          string   `inbound:"proxy,omitempty"`
+}
+
+func (o Hysteria2RealmOption) Build() LC.Hysteria2RealmOption {
+	return LC.Hysteria2RealmOption{
+		Enable:         o.Enable,
+		ServerURL:      o.ServerURL,
+		Token:          o.Token,
+		RealmID:        o.RealmID,
+		STUNServers:    o.STUNServers,
+		SNI:            o.SNI,
+		SkipCertVerify: o.SkipCertVerify,
+		Fingerprint:    o.Fingerprint,
+		Certificate:    o.Certificate,
+		PrivateKey:     o.PrivateKey,
+		ALPN:           o.ALPN,
+		Proxy:          o.Proxy,
+	}
 }
 
 func (o Hysteria2Option) Equal(config C.InboundConfig) bool {
@@ -52,6 +100,9 @@ func NewHysteria2(options *Hysteria2Option) (*Hysteria2, error) {
 			ObfsPassword:          options.ObfsPassword,
 			Certificate:           options.Certificate,
 			PrivateKey:            options.PrivateKey,
+			ClientAuthType:        options.ClientAuthType,
+			ClientAuthCert:        options.ClientAuthCert,
+			EchKey:                options.EchKey,
 			MaxIdleTime:           options.MaxIdleTime,
 			ALPN:                  options.ALPN,
 			Up:                    options.Up,
@@ -59,8 +110,15 @@ func NewHysteria2(options *Hysteria2Option) (*Hysteria2, error) {
 			IgnoreClientBandwidth: options.IgnoreClientBandwidth,
 			Masquerade:            options.Masquerade,
 			CWND:                  options.CWND,
+			BBRProfile:            options.BBRProfile,
 			UdpMTU:                options.UdpMTU,
 			MuxOption:             options.MuxOption.Build(),
+			RealmOpts:             options.RealmOpts.Build(),
+			// quic-go special config
+			InitialStreamReceiveWindow:     options.InitialStreamReceiveWindow,
+			MaxStreamReceiveWindow:         options.MaxStreamReceiveWindow,
+			InitialConnectionReceiveWindow: options.InitialConnectionReceiveWindow,
+			MaxConnectionReceiveWindow:     options.MaxConnectionReceiveWindow,
 		},
 	}, nil
 }
@@ -72,12 +130,13 @@ func (t *Hysteria2) Config() C.InboundConfig {
 
 // Address implements constant.InboundListener
 func (t *Hysteria2) Address() string {
+	var addrList []string
 	if t.l != nil {
 		for _, addr := range t.l.AddrList() {
-			return addr.String()
+			addrList = append(addrList, addr.String())
 		}
 	}
-	return ""
+	return strings.Join(addrList, ",")
 }
 
 // Listen implements constant.InboundListener

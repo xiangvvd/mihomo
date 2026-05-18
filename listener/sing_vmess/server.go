@@ -2,23 +2,28 @@ package sing_vmess
 
 import (
 	"context"
-	"crypto/tls"
+	"errors"
 	"net"
-	"net/http"
-	"net/url"
 	"strings"
+	"time"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
-	N "github.com/metacubex/mihomo/common/net"
+	"github.com/metacubex/mihomo/component/ca"
+	"github.com/metacubex/mihomo/component/ech"
 	C "github.com/metacubex/mihomo/constant"
 	LC "github.com/metacubex/mihomo/listener/config"
+	"github.com/metacubex/mihomo/listener/reality"
 	"github.com/metacubex/mihomo/listener/sing"
 	"github.com/metacubex/mihomo/ntp"
+	"github.com/metacubex/mihomo/transport/gun"
 	mihomoVMess "github.com/metacubex/mihomo/transport/vmess"
 
+	"github.com/metacubex/http"
+	"github.com/metacubex/mhurl"
 	vmess "github.com/metacubex/sing-vmess"
-	"github.com/sagernet/sing/common"
-	"github.com/sagernet/sing/common/metadata"
+	"github.com/metacubex/sing/common"
+	"github.com/metacubex/sing/common/metadata"
+	"github.com/metacubex/tls"
 )
 
 type Listener struct {
@@ -72,27 +77,86 @@ func New(config LC.VmessServer, tunnel C.Tunnel, additions ...inbound.Addition) 
 
 	sl = &Listener{false, config, nil, service}
 
-	tlsConfig := &tls.Config{}
-	var httpMux *http.ServeMux
+	httpServer := http.Server{
+		IdleTimeout: 30 * time.Second,
+		Protocols:   new(http.Protocols),
+	}
+	tlsConfig := &tls.Config{Time: ntp.Now}
+	var realityBuilder *reality.Builder
 
 	if config.Certificate != "" && config.PrivateKey != "" {
-		cert, err := N.ParseCert(config.Certificate, config.PrivateKey, C.Path)
+		certLoader, err := ca.NewTLSKeyPairLoader(config.Certificate, config.PrivateKey)
 		if err != nil {
 			return nil, err
 		}
-		tlsConfig.Certificates = []tls.Certificate{cert}
+		tlsConfig.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return certLoader()
+		}
+
+		if config.EchKey != "" {
+			err = ech.LoadECHKey(config.EchKey, tlsConfig)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	tlsConfig.ClientAuth = ca.ClientAuthTypeFromString(config.ClientAuthType)
+	if len(config.ClientAuthCert) > 0 {
+		if tlsConfig.ClientAuth == tls.NoClientCert {
+			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		}
+	}
+	if tlsConfig.ClientAuth == tls.VerifyClientCertIfGiven || tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert {
+		pool, err := ca.LoadCertificates(config.ClientAuthCert)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig.ClientCAs = pool
+	}
+	if config.RealityConfig.PrivateKey != "" {
+		if tlsConfig.GetCertificate != nil {
+			return nil, errors.New("certificate is unavailable in reality")
+		}
+		if tlsConfig.ClientAuth != tls.NoClientCert {
+			return nil, errors.New("client-auth is unavailable in reality")
+		}
+		realityBuilder, err = config.RealityConfig.Build(tunnel)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if config.WsPath != "" {
-		httpMux = http.NewServeMux()
+		httpMux := http.NewServeMux()
 		httpMux.HandleFunc(config.WsPath, func(w http.ResponseWriter, r *http.Request) {
 			conn, err := mihomoVMess.StreamUpgradedWebsocketConn(w, r)
 			if err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			sl.HandleConn(conn, tunnel)
+			sl.HandleConn(conn, tunnel, additions...)
 		})
+		httpServer.Handler = httpMux
+		httpServer.Protocols.SetHTTP1(true)
 		tlsConfig.NextProtos = append(tlsConfig.NextProtos, "http/1.1")
+	}
+	if config.GrpcServiceName != "" {
+		httpServer.Handler = gun.NewServerHandler(gun.ServerOption{
+			ServiceName: config.GrpcServiceName,
+			ConnHandler: func(conn net.Conn) {
+				sl.HandleConn(conn, tunnel, additions...)
+			},
+			HttpHandler: httpServer.Handler,
+		})
+		httpServer.Protocols.SetHTTP2(true)
+		// SetUnencryptedHTTP2 to ensure we can work in plain http2 and some tls conn is not *tls.Conn (like *reality.Conn)
+		//
+		// Enable HTTP/2 support unconditionally on the server.
+		//
+		// Note that this usage is limited to our own net/http fork
+		// The standard library also needs to mask the tls.Conn type for the conn returned by the Listener.
+		// see: https://github.com/golang/go/issues/79293#issuecomment-4426393534
+		httpServer.Protocols.SetUnencryptedHTTP2(true)
+		tlsConfig.NextProtos = append([]string{"h2"}, tlsConfig.NextProtos...) // h2 must before http/1.1
 	}
 
 	for _, addr := range strings.Split(config.Listen, ",") {
@@ -103,14 +167,16 @@ func New(config LC.VmessServer, tunnel C.Tunnel, additions ...inbound.Addition) 
 		if err != nil {
 			return nil, err
 		}
-		if len(tlsConfig.Certificates) > 0 {
+		if realityBuilder != nil {
+			l = realityBuilder.NewListener(l)
+		} else if tlsConfig.GetCertificate != nil {
 			l = tls.NewListener(l, tlsConfig)
 		}
 		sl.listeners = append(sl.listeners, l)
 
 		go func() {
-			if httpMux != nil {
-				_ = http.Serve(l, httpMux)
+			if httpServer.Handler != nil {
+				_ = httpServer.Serve(l)
 				return
 			}
 			for {
@@ -121,7 +187,6 @@ func New(config LC.VmessServer, tunnel C.Tunnel, additions ...inbound.Addition) 
 					}
 					continue
 				}
-				N.TCPKeepAlive(c)
 
 				go sl.HandleConn(c, tunnel)
 			}
@@ -162,7 +227,7 @@ func (l *Listener) HandleConn(conn net.Conn, tunnel C.Tunnel, additions ...inbou
 	ctx := sing.WithAdditions(context.TODO(), additions...)
 	err := l.service.NewConnection(ctx, conn, metadata.Metadata{
 		Protocol: "vmess",
-		Source:   metadata.ParseSocksaddr(conn.RemoteAddr().String()),
+		Source:   metadata.SocksaddrFromNet(conn.RemoteAddr()),
 	})
 	if err != nil {
 		_ = conn.Close()
@@ -179,7 +244,7 @@ func HandleVmess(conn net.Conn, tunnel C.Tunnel, additions ...inbound.Addition) 
 }
 
 func ParseVmessURL(s string) (addr, username, password string, err error) {
-	u, err := url.Parse(s)
+	u, err := mhurl.Parse(s) // we need multiple hosts url supports
 	if err != nil {
 		return
 	}

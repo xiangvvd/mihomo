@@ -1,6 +1,7 @@
 package shadowsocks
 
 import (
+	"fmt"
 	"net"
 	"strings"
 
@@ -8,7 +9,9 @@ import (
 	N "github.com/metacubex/mihomo/common/net"
 	C "github.com/metacubex/mihomo/constant"
 	LC "github.com/metacubex/mihomo/listener/config"
+	"github.com/metacubex/mihomo/listener/sing"
 	"github.com/metacubex/mihomo/transport/shadowsocks/core"
+	obfs "github.com/metacubex/mihomo/transport/simple-obfs"
 	"github.com/metacubex/mihomo/transport/socks5"
 )
 
@@ -18,25 +21,48 @@ type Listener struct {
 	listeners    []net.Listener
 	udpListeners []*UDPListener
 	pickCipher   core.Cipher
+	handler      *sing.ListenerHandler
+	simpleObfs   func(net.Conn) net.Conn
 }
 
 var _listener *Listener
 
-func New(config LC.ShadowsocksServer, tunnel C.Tunnel) (*Listener, error) {
+func New(config LC.ShadowsocksServer, tunnel C.Tunnel, additions ...inbound.Addition) (*Listener, error) {
 	pickCipher, err := core.PickCipher(config.Cipher, nil, config.Password)
 	if err != nil {
 		return nil, err
 	}
 
-	sl := &Listener{false, config, nil, nil, pickCipher}
+	h, err := sing.NewListenerHandler(sing.ListenerConfig{
+		Tunnel:    tunnel,
+		Type:      C.SHADOWSOCKS,
+		Additions: additions,
+		MuxOption: config.MuxOption,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sl := &Listener{config: config, pickCipher: pickCipher, handler: h}
 	_listener = sl
+
+	if config.SimpleObfs.Enable {
+		switch config.SimpleObfs.Mode {
+		case "http":
+			sl.simpleObfs = obfs.NewHTTPObfsServer
+		case "tls":
+			sl.simpleObfs = obfs.NewTLSObfsServer
+		default:
+			return nil, fmt.Errorf("unsupported simple obfs mode: %s", config.SimpleObfs.Mode)
+		}
+	}
 
 	for _, addr := range strings.Split(config.Listen, ",") {
 		addr := addr
 
 		if config.Udp {
 			//UDP
-			ul, err := NewUDP(addr, pickCipher, tunnel)
+			ul, err := NewUDP(addr, pickCipher, tunnel, additions...)
 			if err != nil {
 				return nil, err
 			}
@@ -59,8 +85,7 @@ func New(config LC.ShadowsocksServer, tunnel C.Tunnel) (*Listener, error) {
 					}
 					continue
 				}
-				N.TCPKeepAlive(c)
-				go sl.HandleConn(c, tunnel)
+				go sl.HandleConn(c, tunnel, additions...)
 			}
 		}()
 	}
@@ -100,6 +125,9 @@ func (l *Listener) AddrList() (addrList []net.Addr) {
 }
 
 func (l *Listener) HandleConn(conn net.Conn, tunnel C.Tunnel, additions ...inbound.Addition) {
+	if l.simpleObfs != nil {
+		conn = l.simpleObfs(conn)
+	}
 	conn = l.pickCipher.StreamConn(conn)
 	conn = N.NewDeadlineConn(conn) // embed ss can't handle readDeadline correctly
 
@@ -108,7 +136,8 @@ func (l *Listener) HandleConn(conn net.Conn, tunnel C.Tunnel, additions ...inbou
 		_ = conn.Close()
 		return
 	}
-	tunnel.HandleTCPConn(inbound.NewSocket(target, conn, C.SHADOWSOCKS, additions...))
+	l.handler.HandleSocket(target, conn, additions...)
+	//tunnel.HandleTCPConn(inbound.NewSocket(target, conn, C.SHADOWSOCKS, additions...))
 }
 
 func HandleShadowSocks(conn net.Conn, tunnel C.Tunnel, additions ...inbound.Addition) bool {
