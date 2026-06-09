@@ -168,7 +168,7 @@ func NewBdzl(option BdzlOption) (*Bdzl, error) {
 		Base: NewBase(BaseOption{
 			Name:         option.Name,
 			Addr:         net.JoinHostPort(option.Server, strconv.Itoa(option.Port)),
-			Type:         C.Http,
+			Type:         C.Bdzl,
 			ProviderName: option.ProviderName,
 			TFO:          option.TFO,
 			MPTCP:        option.MPTCP,
